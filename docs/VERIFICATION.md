@@ -1,5 +1,9 @@
 # Verification record — 2026-10-23
 
+## Latest iPhone installation
+
+Source commit `88d4de7` built and signed successfully, installed over the existing app on the connected iPhone 12 mini, and launched successfully using devicectl. Existing app data was preserved. This supersedes the earlier simulator-only deployment notes below; physical AR accuracy, animation performance and room-recovery acceptance still require testing.
+
 ## Current animated scan update
 
 - Reviewed the supplied 6.5-second RoomPlan promotional clip at **three timestamps** (0.6, 3.2 and 5.8 seconds). No video/frames are included in the repository. The local Floor Planner app was inspected and is a separate 2D web tool, not an AR scanner.
