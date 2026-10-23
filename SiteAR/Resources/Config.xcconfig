@@ -1,0 +1,6 @@
+// Copy Secrets.example.xcconfig to Secrets.xcconfig; never use a service-role key.
+#include? "Secrets.xcconfig"
+PRODUCT_BUNDLE_IDENTIFIER = de.davidwesthauser.SiteAR
+IPHONEOS_DEPLOYMENT_TARGET = 17.0
+SWIFT_VERSION = 5.0
+TARGETED_DEVICE_FAMILY = 1

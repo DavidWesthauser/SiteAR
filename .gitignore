@@ -1,0 +1,6 @@
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+SiteAR/Resources/Secrets.xcconfig
+.DS_Store
