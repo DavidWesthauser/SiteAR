@@ -1,9 +1,22 @@
 # Verification record — 2026-10-23
 
-## Current drawing, area and image update
+## Current multi-view recognition update
+
+- Capture now requires four heading sectors and three positions at least 0.5 m apart, in addition to map/tracking/surface readiness. Regression tests distinguish walking with one viewing direction from spinning in place; neither alone completes capture.
+- Deterministic suite: **36 passed**, zero failures. Simulator layout/rendering and project/room/scan navigation: **3 focused tests passed**; the final layout-only rerun also passed, with compact and large-text scan screenshots visually checked after the last display adjustment.
+- Recovery offers continued searching without resetting the session. No mesh-based matching or viewpoint-independent recognition is claimed. Existing sparse maps are preserved, not automatically expanded.
+- At the user's request this revision is **not installed or tested on the phone**. A signing attempt for the earlier scan-screen changes failed with macOS errSecInternalComponent; simulator compilation/testing is independent of that keychain issue.
+
+## Scan and placement update
+
+- Removed the silent estimated-surface fallback, corrected measured-distance placement to use the actual screen ray, retained finer boundary corners and added a targeted-surface preview.
+- Replaced the scan dashboard with a camera-first Cancel/Finish overlay and floating live surface overview. This remains camera-only ARKit plane detection, not RoomPlan semantic geometry.
+- Deterministic suite: **36 tests passed**, including the new off-centre measured-distance fixture. Simulator layout/rendering and navigation checks are recorded below; live wall accuracy and scan duration cannot be verified in the simulator.
+
+## Drawing, area and image update
 
 - Signed iPhone Debug build: **succeeded** with Xcode 27.1. Installed over the existing app on the physical **iPhone 12 mini (iOS 27.0.1)**, preserving local data.
-- macOS deterministic suite: **34 tests passed**, zero failures. Covers transforms, localization evidence, serialization, stroke boundaries, smoothing without overshoot, image metadata, persistence and Store/backend behavior.
+- macOS deterministic suite: **36 tests passed**, zero failures. Covers transforms, localization evidence, serialization, stroke boundaries, smoothing without overshoot, image metadata, persistence and Store/backend behavior.
 - Simulator: **four focused tests passed** across the final two runs: layout states, image/separate-stroke persistence and rendering, legacy shape rendering, and local project/room/scan navigation. The final layout/persistence rerun passed both tests after the last edits.
 - **30 layout screenshots** were exported and visually reviewed: empty projects, login, settings, task views, placement/work-detail forms, scanning, recognition, tracking loss, recovery, worker view and all three editor tools. Includes compact 375-point widths, 667/812-point heights and accessibility text sizes. Fixes include a fixed Save bar, compact header, adaptive controls, keyboard-safe sheets and a crosshair in the unobstructed camera region. These fixtures cannot prove every possible interactive or keyboard state.
 - A real normalized PNG and two independent paths were saved, the local Store reopened, bytes/metadata checked, texture decoded and separate RealityKit entities rendered. Simulator fixtures do not validate real camera capture, touch-to-wall accuracy or frozen-view projection on hardware.

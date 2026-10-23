@@ -39,11 +39,14 @@ struct FrozenDrawingFrame {
     private(set) var room: Room
     @Published private(set) var mode: ARMode
     @Published var scan = ScanProgress()
+    @Published private(set) var surfaceTarget = "Oberfläche suchen"
+    private var targetedSurface: UUID? { didSet { if oldValue != targetedSurface { refreshSurfaceColors() } } }
     @Published var tool: AnnotationKind = .line { didSet { renderDraft() } }
     @Published var showSurfaceGuides = true { didSet { refreshSurfaceVisuals() } }
     private var detectedSurfaces: [UUID: SurfacePatch] = [:]
     private var surfaceEntities: [UUID: AnchorEntity] = [:]
     private var lastProgressUpdate: TimeInterval = 0
+    private var coverage = ScanCoverage()
     var annotations: [Annotation] = []
     var roomFromMarker: Pose?
     var referenceImage: ARReferenceImage?
@@ -123,7 +126,7 @@ struct FrozenDrawingFrame {
     private func reset(_ config: ARWorldTrackingConfiguration) {
         frozenFrame = nil
         clearVisuals(); localization.searching(); normalSince = nil; restoredSentinel = false
-        clearSurfaces(); scan = ScanProgress(); lastProgressUpdate = 0
+        clearSurfaces(); scan = ScanProgress(); coverage = ScanCoverage(); lastProgressUpdate = 0
         candidateMarker = nil; trackingNormal = false; mapped = false; manualActive = false; manualSamples = []
         startedAt = Date(); running = true; interrupted = false
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
@@ -136,7 +139,12 @@ struct FrozenDrawingFrame {
     }
     func startMap() {
         guard ready, let savedMap else { error = "No usable map. Try marker or manual recovery."; return }
-        strategy = .map; reset(configuration(map: savedMap)); guidance = "Searching for room · look at familiar features near the entrance."
+        strategy = .map; reset(configuration(map: savedMap)); guidance = "Raum wird gesucht. Schau auf Details, die beim ursprünglichen Rundgang erfasst wurden – aus mehreren Winkeln."
+    }
+    func continueSearching() {
+        guard running, strategy == .map, savedMap != nil, localization.state == .failed else { return }
+        localization.searching(); normalSince=nil; startedAt=Date()
+        guidance="Suche wird fortgesetzt. Gehe zu einer gescannten Stelle und schau auf wiedererkennbare Details."
     }
     func startMarker() {
         guard ready, referenceImage != nil, roomFromMarker != nil else { error = "This room has no fixed marker. Retry scanning the room from the original starting viewpoint."; return }
@@ -202,13 +210,20 @@ struct FrozenDrawingFrame {
             progress.stableSeconds = normal ? Double(frame.timestamp - (normalSince ?? frame.timestamp)) : 0
             progress.featureCount = frame.rawFeaturePoints?.points.count ?? 0
             progress.surfaces = detectedSurfaces.values.sorted { $0.id.uuidString < $1.id.uuidString }
+            if mode == .mapping {
+                coverage.observe(position:frame.camera.transform.columns.3.xyz,forward:-frame.camera.transform.columns.2.xyz,
+                                 reliable:normal && (frame.worldMappingStatus == .mapped || frame.worldMappingStatus == .extending))
+            }
+            progress.coverage=coverage
             scan = progress
+            updateTarget()
         }
         if trackingNormal { refreshSurfaceVisuals() } else { hideSurfaces() }
         if normal { if normalSince == nil { normalSince = frame.timestamp } } else { normalSince = nil }
         if mode == .mapping {
             if !normal { guidance = "Tracking limited. Move slowly; improve lighting and look at textured surfaces." }
-            else if !mapped { guidance = "Scan walls and floor from different angles. White outlines show detected surfaces." }
+            else if !coverage.ready { guidance = coverage.instruction }
+            else if !mapped { guidance = "Gehe langsam zurück zu bereits erfassten Details, bis ARKit die Karte verbunden hat." }
             else { guidance = scan.canFinish ? "Room map ready. You can finish scanning and start drawing." : "Keep moving gently until surfaces are detected and tracking is stable." }
             return
         }
@@ -224,7 +239,7 @@ struct FrozenDrawingFrame {
             guidance = "Room recognized. Saved drawings are restored."
         }
         if localization.state == .relocalizing && Date().timeIntervalSince(startedAt) > 40 {
-            localization.fail(); clearVisuals(); guidance = "Room not recognized yet. Return to the original scan viewpoint, improve lighting and retry. Saved drawings are hidden."
+            localization.fail(); clearVisuals(); guidance = "Noch nicht erkannt. Schau auf zuvor gescannte Kanten und strukturierte Flächen. Du kannst ohne Neustart weitersuchen; Zeichnungen bleiben ausgeblendet."
         }
     }
     func session(_ session: ARSession, didAdd anchors: [ARAnchor]) { process(anchors) }
@@ -259,10 +274,24 @@ struct FrozenDrawingFrame {
 
     private func hit(_ point: CGPoint) -> simd_float4x4? {
         guard trackingNormal else { return nil }
-        for target in [ARRaycastQuery.Target.existingPlaneGeometry, .estimatedPlane] {
-            if let query = view.makeRaycastQuery(from: point, allowing: target, alignment: .any), let result = view.session.raycast(query).first { return result.worldTransform }
+        guard let query = view.makeRaycastQuery(from: point, allowing: .existingPlaneGeometry, alignment: .any),
+              let result = view.session.raycast(query).first,
+              let camera = view.session.currentFrame?.camera else { return nil }
+        let distance = simd_distance(camera.transform.columns.3.xyz,result.worldTransform.columns.3.xyz)
+        guard distance >= 0.15, distance <= 5 else { return nil }
+        return result.worldTransform
+    }
+    private func updateTarget() {
+        guard trackingNormal, let point=aimPoint,
+              let query=view.makeRaycastQuery(from:point,allowing:.existingPlaneGeometry,alignment:.any),
+              let result=view.session.raycast(query).first,
+              let plane=result.anchor as? ARPlaneAnchor,
+              let camera=view.session.currentFrame?.camera else {
+            targetedSurface=nil; surfaceTarget="Auf eine erkannte Fläche zielen"; return
         }
-        return nil
+        let distance=simd_distance(camera.transform.columns.3.xyz,result.worldTransform.columns.3.xyz)
+        targetedSurface=plane.identifier
+        surfaceTarget=distance>5 ? "Näher an die Fläche gehen" : String(format:"%@ · %.2f m",plane.alignment == .vertical ? "Vertikale Fläche" : "Horizontale Fläche",distance)
     }
     @objc private func tapped(_ recognizer: UITapGestureRecognizer) {
         let point = recognizer.location(in: view)
@@ -355,8 +384,12 @@ struct FrozenDrawingFrame {
         if mode == .editing, distance == nil || drawingPlane != nil { captureScreenPoint(point); return }
         var matrix: simd_float4x4
         if let distance {
-            var offset = matrix_identity_float4x4; offset.columns.3.z = -distance
-            matrix = frame.camera.transform * offset
+            let viewport=view.bounds.size
+            guard viewport.width>0, viewport.height>0 else { return }
+            let vp=frame.camera.projectionMatrix(for:.portrait,viewportSize:viewport,zNear:0.01,zFar:100)*frame.camera.viewMatrix(for:.portrait)
+            guard let ray=DrawingGeometry.ray(screen:SIMD2(Float(point.x/viewport.width),Float(point.y/viewport.height)),inverseViewProjection:simd_inverse(vp)),
+                  let position=DrawingGeometry.measuredPoint(camera:frame.camera.transform.columns.3.xyz,direction:ray.direction,distance:distance) else { return }
+            matrix=frame.camera.transform; matrix.columns.3=SIMD4(position,1)
         } else {
             guard let hit = hit(point) else { error = "No surface found. Move slowly, try another angle, or choose explicit distance placement."; return }; matrix = hit
         }
@@ -424,7 +457,7 @@ struct FrozenDrawingFrame {
             return pendingPublication // Idempotent retry if a previous PATCH succeeded but its response was lost.
         }
         guard mode == .mapping, scan.canFinish else {
-            throw AppError.message("Keep scanning until tracking is stable, at least one surface is detected and the room map is ready.")
+            throw AppError.message("Erfasse alle vier Blickrichtungen und mindestens drei Standorte. Warte auf stabile Erfassung, erkannte Flächen und eine bereite Raumkarte.")
         }
         // Keep an encoded snapshot for retry after a network failure; uploads never overwrite a live asset.
         if pendingMapData == nil {
@@ -588,9 +621,10 @@ extension ARController {
         detectedSurfaces[patch.id] = patch
         if let old = surfaceEntities.removeValue(forKey: patch.id) { view.scene.removeAnchor(old) }
         let root = AnchorEntity(world: plane.transform)
-        let points = DrawingGeometry.outline(boundary).map { $0.vector + SIMD3<Float>(0,0.003,0) }
+        let points = DrawingGeometry.outline(boundary,tolerance:0.005).map { $0.vector + SIMD3<Float>(0,0.003,0) }
         for (a,b) in zip(points, points.dropFirst() + [points[0]]) { addSegment(a,b,to:root,color:.white,thickness:0.004) }
         surfaceEntities[patch.id] = root; view.scene.addAnchor(root)
+        if targetedSurface == patch.id { refreshSurfaceColors() }
         root.isEnabled = showSurfaceGuides && trackingNormal && (mode == .mapping || localization.state == .aligned)
     }
     private func addArrow(_ tail: SIMD3<Float>, _ tip: SIMD3<Float>, normal: SIMD3<Float>, to entity: Entity, color: UIColor) {
@@ -605,8 +639,17 @@ extension ARController {
         if let mesh = try? MeshResource.generate(from:[descriptor]) { entity.addChild(ModelEntity(mesh:mesh,materials:[UnlitMaterial(color:color)])) }
     }
     private func refreshSurfaceVisuals() {
-        let visible = showSurfaceGuides && trackingNormal && (mode == .mapping || localization.state == .aligned)
-        for entity in surfaceEntities.values { entity.isEnabled = visible }
+        let allowed = trackingNormal && (mode == .mapping || localization.state == .aligned)
+        for (id,entity) in surfaceEntities {
+            entity.isEnabled = allowed && (showSurfaceGuides || (mode == .editing && drawingPlane == nil && id == targetedSurface))
+        }
+    }
+    private func refreshSurfaceColors() {
+        for (id,entity) in surfaceEntities {
+            for child in entity.children {
+                if let model=child as? ModelEntity { model.model?.materials=[UnlitMaterial(color:id == targetedSurface ? .systemMint : .white)] }
+            }
+        }
     }
     private func hideSurfaces() { for entity in surfaceEntities.values { entity.isEnabled = false } }
     private func clearSurfaces() {

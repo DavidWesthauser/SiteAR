@@ -14,6 +14,33 @@ final class SpatialTests: XCTestCase {
     func assertMatrix(_ a: Pose, _ b: Pose, file: StaticString = #filePath, line: UInt = #line) {
         for (x,y) in zip(a.elements,b.elements) { XCTAssertEqual(x,y,accuracy: 0.0001,file:file,line:line) }
     }
+    func testCoverageNeedsTranslationAndDifferentDirections() {
+        var coverage=ScanCoverage()
+        for i in 0..<4 {
+            let angle=Float(i)*Float.pi/2+0.2
+            coverage.observe(position:.zero,forward:SIMD3(sin(angle),0,cos(angle)),reliable:true)
+        }
+        XCTAssertEqual(coverage.headings.count,4); XCTAssertEqual(coverage.positions.count,1)
+        XCTAssertFalse(coverage.ready) // Spinning on the spot is insufficient.
+        coverage.observe(position:SIMD3(0.2,0,0),forward:SIMD3(1,0,0),reliable:true)
+        XCTAssertEqual(coverage.positions.count,1)
+        coverage.observe(position:SIMD3(1,0,0),forward:SIMD3(1,0,0),reliable:false)
+        XCTAssertEqual(coverage.positions.count,1)
+        for x:Float in [0.6,1.2] { coverage.observe(position:SIMD3(x,0,0),forward:SIMD3(1,0,0),reliable:true) }
+        XCTAssertTrue(coverage.ready)
+        var oneDirection=ScanCoverage()
+        for x:Float in [0,0.6,1.2] { oneDirection.observe(position:SIMD3(x,0,0),forward:SIMD3(0,0,-1),reliable:true) }
+        XCTAssertFalse(oneDirection.ready)
+    }
+    func testMeasuredDistanceUsesOffCentreScreenDirection() throws {
+        let camera=SIMD3<Float>(1,2,3), direction=SIMD3<Float>(1,0,-1)
+        let point=try XCTUnwrap(DrawingGeometry.measuredPoint(camera:camera,direction:direction,distance:2))
+        XCTAssertEqual(simd_distance(point,camera),2,accuracy:0.0001)
+        XCTAssertGreaterThan(point.x,camera.x)
+        XCTAssertEqual(point.y,camera.y)
+        XCTAssertNil(DrawingGeometry.measuredPoint(camera:camera,direction:.zero,distance:2))
+        XCTAssertNil(DrawingGeometry.measuredPoint(camera:camera,direction:direction,distance:.nan))
+    }
     func testMarkerRecoveryAcrossDifferentOriginsAndYaw() throws {
         let roomFromMarker = try transform(SIMD3(3,1,-4),yaw: 0.3)
         let expected = try transform(SIMD3(-7,0.2,5),yaw: -1.2)
@@ -126,6 +153,10 @@ extension SpatialTests {
         XCTAssertFalse(progress.canFinish)
         let surface = SurfacePatch(id:UUID(),pose:.identity,vertices:[Point3(.zero),Point3(SIMD3(1,0,0)),Point3(SIMD3(1,0,1))],vertical:false)
         try surface.validate(); progress.surfaces = [surface]
+        for i in 0..<4 {
+            let angle=Float(i)*Float.pi/2+0.2
+            progress.coverage.observe(position:SIMD3(Float(i)*0.6,0,0),forward:SIMD3(sin(angle),0,cos(angle)),reliable:true)
+        }
         XCTAssertTrue(progress.canFinish); XCTAssertEqual(progress.stage,3); XCTAssertEqual(progress.horizontalCount,1)
         progress.normalTracking = false; XCTAssertFalse(progress.canFinish); XCTAssertEqual(progress.stage,0)
         progress.normalTracking = true; progress.mapReady = false; XCTAssertFalse(progress.canFinish)

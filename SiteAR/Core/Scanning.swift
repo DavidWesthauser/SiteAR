@@ -24,14 +24,39 @@ public struct ScanProgress: Equatable, Sendable {
     public var stableSeconds: Double = 0
     public var featureCount = 0
     public var surfaces: [SurfacePatch] = []
+    public var coverage = ScanCoverage()
     public init() {}
     public var verticalCount: Int { surfaces.filter(\.vertical).count }
     public var horizontalCount: Int { surfaces.count - verticalCount }
-    public var canFinish: Bool { normalTracking && mapReady && stableSeconds >= 2 && !surfaces.isEmpty }
+    public var canFinish: Bool { normalTracking && mapReady && stableSeconds >= 2 && !surfaces.isEmpty && coverage.ready }
     public var stage: Int {
         guard normalTracking else { return 0 }
         if canFinish { return 3 }
         if !surfaces.isEmpty { return 2 }
         return normalTracking ? 1 : 0
+    }
+}
+
+/// Movement evidence for a multi-view scan; not a guarantee of geometric or recognition coverage.
+public struct ScanCoverage: Equatable, Sendable {
+    public private(set) var headings: Set<Int> = []
+    public private(set) var positions: [Point3] = []
+    public init() {}
+    public var ready: Bool { headings.count >= 4 && positions.count >= 3 }
+    public mutating func observe(position: SIMD3<Float>, forward: SIMD3<Float>, reliable: Bool) {
+        guard reliable, [position.x,position.y,position.z,forward.x,forward.y,forward.z].allSatisfy(\.isFinite),
+              simd_length(SIMD2(forward.x,forward.z))>0.3 else { return }
+        // Four world-relative compass sectors. A boundary crossing alone cannot fill all sectors.
+        let angle=atan2(forward.x,forward.z)+Float.pi
+        headings.insert(min(3,Int(angle/(Float.pi/2))))
+        let horizontal=SIMD2(position.x,position.z)
+        if positions.count<32 && positions.allSatisfy({ simd_distance(SIMD2($0.x,$0.z),horizontal)>=0.5 }) {
+            positions.append(Point3(position))
+        }
+    }
+    public var instruction: String {
+        if positions.count<3 { return "Gehe langsam zu weiteren Stellen im Raum und schau auf Kanten und strukturierte Flächen." }
+        if headings.count<4 { return "Schau auch in die anderen Richtungen. Erfasse jede Raumseite aus mehreren Winkeln." }
+        return "Blicke beim Zurückgehen auf bereits erfasste Details, damit sich die Karte verbindet."
     }
 }

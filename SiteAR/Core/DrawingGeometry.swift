@@ -26,6 +26,13 @@ public enum DrawingGeometry {
         let y = simd_normalize(simd_cross(z,x))
         return try Pose(simd_float4x4(columns: (SIMD4(x,0),SIMD4(y,0),SIMD4(z,0),SIMD4(point,1))))
     }
+    /// A measured distance follows the selected screen ray, including off-centre crosshairs.
+    public static func measuredPoint(camera:SIMD3<Float>,direction:SIMD3<Float>,distance:Float) -> SIMD3<Float>? {
+        guard distance.isFinite, (0.1...10).contains(distance),
+              [camera.x,camera.y,camera.z,direction.x,direction.y,direction.z].allSatisfy(\.isFinite),
+              simd_length(direction)>0.001 else { return nil }
+        return camera+simd_normalize(direction)*distance
+    }
     /// Screen coordinates are normalized top-left 0...1, using the captured camera's exact projection.
     public static func ray(screen: SIMD2<Float>, inverseViewProjection: simd_float4x4) -> SpatialRay? {
         let ndc = SIMD2(2*screen.x-1,1-2*screen.y)

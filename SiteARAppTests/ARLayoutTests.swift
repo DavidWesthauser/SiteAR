@@ -22,6 +22,10 @@ import RealityKit
         room.map_path="test-only.worldmap"
         let patch=SurfacePatch(id:UUID(),pose:.identity,vertices:[Point3(.zero),Point3(SIMD3(2,0,0)),Point3(SIMD3(2,0,2))],vertical:false)
         var ready=ScanProgress(); ready.normalTracking=true; ready.mapReady=true; ready.stableSeconds=3; ready.featureCount=620; ready.surfaces=[patch]
+        for i in 0..<4 {
+            let angle=Float(i)*Float.pi/2+0.2
+            ready.coverage.observe(position:SIMD3(Float(i)*0.6,0,0),forward:SIMD3(sin(angle),0,cos(angle)),reliable:true)
+        }
         let configurations:[(String,ARMode)] = [("scan-start",.mapping),("scan-ready",.mapping),("recognizing",.walkthrough),("tracking-lost",.editing),("draw-editor",.editing),("area-editor",.editing),("image-empty",.editing),("image-loaded",.editing),("worker-aligned",.walkthrough),("recovery",.walkthrough)]
         for (name,mode) in configurations {
             let ar=ARController(room:room,mode:mode)

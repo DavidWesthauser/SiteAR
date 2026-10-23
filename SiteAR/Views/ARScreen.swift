@@ -62,6 +62,9 @@ struct ARScreen: View {
         ZStack {
             CameraView(controller: ar).ignoresSafeArea()
             if let frame = ar.frozenFrame { FrozenDrawingView(ar:ar,frame:frame).ignoresSafeArea() }
+            if mode == .mapping {
+                scanOverlay
+            } else {
             VStack(spacing: 8) {
                 HStack(spacing:8) {
                     Button { closing=true } label: { Image(systemName:"xmark").font(.system(size:20,weight:.semibold)).frame(width:44,height:44) }.accessibilityLabel("Close")
@@ -78,7 +81,7 @@ struct ARScreen: View {
                         if mode == .editing || ar.manualActive { Image(systemName:"plus").font(.system(size:20,weight:.semibold)).foregroundStyle(.white).shadow(radius:2).accessibilityHidden(true) }
                     }.preference(key:CameraAimPreference.self,value:CGPoint(x:proxy.frame(in:.global).midX,y:proxy.frame(in:.global).midY))
                 }.frame(minHeight:44).allowsHitTesting(false)
-                if mode == .mapping || scanMore { ScanOverview(progress: ar.scan) }
+                if mode == .mapping || scanMore { ScanOverview(progress: ar.scan,showCoverage:mode == .mapping) }
                 if ar.localization.state == .verifying {
                     VStack {
                         Text("Optional recovery: check that the marker is fixed and the saved reference positions agree.").font(.subheadline)
@@ -102,6 +105,9 @@ struct ARScreen: View {
                                         Button(scanMore ? "Hide scan overview" : "Scan more surfaces") { ar.resumeCamera(); scanMore.toggle(); ar.showSurfaceGuides=scanMore }.font(.caption)
                                     } else { Toggle("Show surface outlines", isOn: $ar.showSurfaceGuides).font(.caption) }
                                 } else if ar.localization.state != .verifying {
+                                    if ar.localization.state == .failed {
+                                        Button("Ohne Neustart weitersuchen") { ar.continueSearching() }.buttonStyle(.borderedProminent)
+                                    }
                                     Button("Scan room again") { ar.startMap() }.buttonStyle(.borderedProminent).disabled(!ar.ready)
                                 }
                                 if room.marker != nil || room.reference_points.count == 2 {
@@ -125,6 +131,7 @@ struct ARScreen: View {
                 }
                 if mode != .mapping && ar.localization.state != .verifying { Button("Werkzeuge",systemImage:tools ? "chevron.down" : "chevron.up") { tools.toggle() }.font(.caption).padding(.horizontal,12).frame(minHeight:44).background(.regularMaterial,in:Capsule()).accessibilityLabel(tools ? "Werkzeuge ausblenden" : "Werkzeuge einblenden") }
             }.padding(.horizontal, 12).padding(.bottom, 8)
+            }
             if saving { Color.black.opacity(0.3).ignoresSafeArea(); ProgressView("Saving room…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) }
         }
         .onPreferenceChange(CameraAimPreference.self) { point in if let point { ar.aimPoint=ar.view.convert(point,from:nil) } }
@@ -183,6 +190,33 @@ struct ARScreen: View {
             } : nil) }.environmentObject(store)
         }
     }
+    private var scanOverlay: some View {
+        VStack(spacing:12) {
+            HStack {
+                Button("Abbrechen") { closing=true }.frame(minWidth:44,minHeight:44).accessibilityLabel("Close")
+                Spacer()
+                Button { saveRoom() } label: {
+                    Text("Fertig").fontWeight(.semibold).frame(minWidth:64,minHeight:44)
+                }.disabled(!ar.scan.canFinish || saving).accessibilityIdentifier("scan.finish")
+            }.padding(.horizontal,8).background(.black.opacity(0.3),in:RoundedRectangle(cornerRadius:16))
+            GeometryReader { proxy in
+                Color.clear.preference(key:CameraAimPreference.self,value:CGPoint(x:proxy.frame(in:.global).midX,y:proxy.frame(in:.global).midY))
+            }.frame(minHeight:44).allowsHitTesting(false)
+            ScanOverview(progress:ar.scan)
+            Text(ar.scan.canFinish ? "Prüfe die Umrisse an echten Kanten." : ar.guidance)
+                .font(.subheadline.weight(.medium)).multilineTextAlignment(.center).fixedSize(horizontal:false,vertical:true)
+                .padding(12).frame(maxWidth:.infinity).background(.black.opacity(0.55),in:RoundedRectangle(cornerRadius:14))
+            Button("Optionen",systemImage:"slider.horizontal.3") { markerExpanded=true }
+                .font(.subheadline).frame(minHeight:44).padding(.horizontal,16).background(.black.opacity(0.4),in:Capsule())
+        }.foregroundStyle(.white).padding(.horizontal,16).padding(.bottom,8)
+        .sheet(isPresented:$markerExpanded) {
+            NavigationStack {
+                Form { Section("Referenzmarker (optional)") { markerTools } }
+                    .navigationTitle("Scan-Optionen").navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement:.confirmationAction) { Button("Fertig") { markerExpanded=false } } }
+            }
+        }
+    }
     private var markerTools: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Only needed if scanning the room later is unreliable. Use a unique, permanently fixed print with its measured width.").font(.caption)
@@ -231,6 +265,11 @@ struct ARScreen: View {
                 Button("Aus Datei auswählen",systemImage:"folder") { importingDrawingImage=true; importing=true }.font(.subheadline)
             } else {
                 Text(ar.tool == .line ? "Ziehen zum Zeichnen. Loslassen beendet den Strich." : "Ecken einer Fläche antippen.").font(.caption)
+            }
+            if ar.drawingPlane == nil {
+                Label(ar.surfaceTarget,systemImage:"scope").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Label("Zeichenebene fixiert",systemImage:"lock.fill").font(.caption).foregroundStyle(.secondary)
             }
             if ar.tool != .line { DisclosureGroup("Genaue Platzierung") { captureControls } }
             Button("Arbeitsanweisung",systemImage:"text.alignleft") { showingWorkDetails=true }.font(.subheadline).frame(minHeight:44)

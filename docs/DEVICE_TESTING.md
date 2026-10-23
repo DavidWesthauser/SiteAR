@@ -6,7 +6,7 @@ Record phone/iOS/app version, room and coordinate IDs, date, lighting and approx
 
 1. Install an unconfigured Debug build through Xcode on the physical phone. The app opens an empty project list without login. Create your own project/room.
 2. Choose Map room. Pan slowly over textured walls, floor and furniture. Verify thin white surface boundaries appear without any filled white faces, the live overview updates, counts represent actual detected planes/features, and Scan abschließen remains disabled until map/tracking readiness.
-3. Tap Scan abschließen. It must transition directly into drawing in the SAME session. No marker print or reference-dot collection is required.
+3. Check the floating surface overview and top Cancel/Finish controls. Tap Fertig. It must transition directly into drawing in the SAME session. No marker print or reference-dot collection is required.
 4. Aim at a wall and choose Lock view. Move/rotate the phone slightly: the editing viewpoint must stay fixed. With **Zeichnen**, draw a curved stroke, lift your finger, then draw elsewhere. There must be no connecting segment, sample dots or angular boxes. Undo must remove only the last stroke. Save and reopen to check both paths persist. Use **Fläche** for three/four coplanar corners. Use **Bild**, import a photo and a transparent PNG, adjust width, tap to place and save. Verify proportions and image bytes survive force-quit/reopen and room recovery. Enter a long title/description through Arbeitsanweisung and check keyboard dismissal. Try Undo/Clear/Resume camera. Reopen walkthrough and inspect geometry while moving sideways. No filled plane faces or sample dots should obscure the room. Check compact-screen controls, scrolling, large text, sticky Save, import cancellation and leaving with an unsaved draft.
 5. Close AR and force-quit the app. Reopen the saved room's walkthrough. From the original viewpoints, look around until Room recognized. Drawings must stay hidden before recovery and then appear automatically, without confirming reference dots.
 6. Walk around and compare wall/area placements. Measure approximate error against an agreed target (for example 10 cm); do not infer survey precision. Repeat on another day and under different lighting.
@@ -34,3 +34,16 @@ Record phone/iOS/app version, room and coordinate IDs, date, lighting and approx
 - **Permissions:** outsider cannot read project/maps/tasks. Workers cannot change drawing geometry or share projects. Revoke worker access and reload; new requests must fail/omit data. Run `supabase test db` too.
 
 Do not mark physical acceptance complete until same-phone persistence and two-phone recognition are recorded. Simulator/Core tests verify state/math/navigation, not camera recognition or physical accuracy. RoomPlan-style classified furniture boxes are not part of the camera-only plane visualization.
+
+## Placement accuracy regression checks
+
+- Aim at an undetected blank wall: placement must wait rather than snap to a guessed depth. Move sideways and inspect the mint highlighted patch before drawing; compare against physical corners.
+- Aim the off-centre crosshair at a known measured location and use measured-distance placement. It must follow that crosshair, not the optical centre. Check the result from the side.
+- Repeat on a feature-rich wall and a blank/reflective surface. Camera-only ARKit boundaries may remain incomplete or inaccurate; do not treat them as RoomPlan window/furniture recognition. Saving readiness still requires a mapped world map and stable tracking; no shorter scan time is guaranteed.
+
+## Multi-view recognition acceptance (physical testing pending)
+
+1. Create a new room revision. Walk to at least three safe positions 0.5 m apart and view all four horizontal directions. Stand still and rotate first: this must not finish the movement requirement. Scan the same textured details from overlapping viewpoints.
+2. Save drawings, end the session and reopen from the entrance, an opposite corner and the middle of the room in separate sessions. Record recovery time and placement error against the same physical marks for each viewpoint; do not label arbitrary-point recognition as accepted.
+3. Repeat facing a blank wall, after changed lighting, and after moving furniture. Uncertain recovery must keep drawings hidden. After timeout, continue searching without a session reset, then test the separate restart action.
+4. Repeat using an older sparse map. The new capture guidance cannot improve that map retroactively; preserve its annotations and use a new room revision to compare broader capture.
