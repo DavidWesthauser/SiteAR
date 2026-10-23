@@ -25,6 +25,7 @@ public struct ScanProgress: Equatable, Sendable {
     public var featureCount = 0
     public var surfaces: [SurfacePatch] = []
     public var coverage = ScanCoverage()
+    public var cameraYaw:Float=0
     public init() {}
     public var verticalCount: Int { surfaces.filter(\.vertical).count }
     public var horizontalCount: Int { surfaces.count - verticalCount }

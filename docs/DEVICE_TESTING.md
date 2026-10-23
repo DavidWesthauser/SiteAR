@@ -47,3 +47,10 @@ Do not mark physical acceptance complete until same-phone persistence and two-ph
 2. Save drawings, end the session and reopen from the entrance, an opposite corner and the middle of the room in separate sessions. Record recovery time and placement error against the same physical marks for each viewpoint; do not label arbitrary-point recognition as accepted.
 3. Repeat facing a blank wall, after changed lighting, and after moving furniture. Uncertain recovery must keep drawings hidden. After timeout, continue searching without a session reset, then test the separate restart action.
 4. Repeat using an older sparse map. The new capture guidance cannot improve that map retroactively; preserve its annotations and use a new room revision to compare broader capture.
+
+## Animated scan acceptance (not yet run on hardware)
+
+- On first detection, confirm white edges trace in once, with a subtle halo. Continue scanning the same patch: its outline must refine without repeatedly disappearing/restarting. Check thin outlines leave the camera unobstructed.
+- Watch the miniature gain only observed patches, with shaded thin surfaces. Turn the phone across the +/-180-degree heading boundary: it should turn smoothly, not spin the long way. Look at floor/wall junctions and check depth ordering from several headings.
+- Enable Settings → Accessibility → Motion → Reduce Motion. New surfaces should appear without the growing/reveal effect. Repeat a scan and background/return to check removed/restarted plane geometry does not linger.
+- Compare appearance and performance on the iPhone 12 mini. Classifying windows/furniture like Apple's RoomPlan video is not an acceptance claim for this camera-only path; physical registration/recognition must still pass separately.

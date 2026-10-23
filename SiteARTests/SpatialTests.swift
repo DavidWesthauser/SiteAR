@@ -14,6 +14,25 @@ final class SpatialTests: XCTestCase {
     func assertMatrix(_ a: Pose, _ b: Pose, file: StaticString = #filePath, line: UInt = #line) {
         for (x,y) in zip(a.elements,b.elements) { XCTAssertEqual(x,y,accuracy: 0.0001,file:file,line:line) }
     }
+    func testMiniatureSlabsKeepRoomPoseAndDoNotInventSurfaces() throws {
+        let pose=try transform(SIMD3(3,2,-1))
+        let patch=SurfacePatch(id:UUID(),pose:pose,vertices:[Point3(.zero),Point3(SIMD3(2,0,0)),Point3(SIMD3(2,0,1)),Point3(SIMD3(0,0,1))],vertical:false)
+        let faces=ScanVisualization.faces(patch)
+        XCTAssertEqual(faces.count,6)
+        XCTAssertEqual(faces[0].vertices[0].x,3,accuracy:0.0001)
+        XCTAssertEqual(faces[0].vertices[0].y,2.0125,accuracy:0.0001)
+        XCTAssertEqual(faces[0].vertices[0].z,-1,accuracy:0.0001)
+        XCTAssertTrue(faces.allSatisfy { (0...1).contains($0.shade) })
+        XCTAssertTrue(ScanVisualization.faces(patch,vertices:[]).isEmpty)
+        let moved=patch.worldVertices.map { $0+SIMD3<Float>(0,1,0) }
+        XCTAssertEqual(ScanVisualization.faces(patch,vertices:moved)[0].vertices[0].y,3.0125,accuracy:0.0001)
+    }
+    func testMiniatureRotationUsesShortestTurnAcrossPi() {
+        let from=Float.pi-0.05,to = -Float.pi+0.05
+        XCTAssertEqual(ScanVisualization.shortAngle(from:from,to:to)-from,0.1,accuracy:0.0001)
+        let p=ScanVisualization.rotate(SIMD3(1,2,0),yaw:Float.pi/2)
+        XCTAssertEqual(p.x,0,accuracy:0.0001);XCTAssertEqual(p.y,2);XCTAssertEqual(p.z,1,accuracy:0.0001)
+    }
     func testCoverageNeedsTranslationAndDifferentDirections() {
         var coverage=ScanCoverage()
         for i in 0..<4 {

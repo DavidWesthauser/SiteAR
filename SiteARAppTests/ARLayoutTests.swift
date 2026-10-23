@@ -21,7 +21,12 @@ import RealityKit
         var room=Room(project_id:project.id,name:"Ein langer Raumname für die Layoutprüfung")
         room.map_path="test-only.worldmap"
         let patch=SurfacePatch(id:UUID(),pose:.identity,vertices:[Point3(.zero),Point3(SIMD3(2,0,0)),Point3(SIMD3(2,0,2))],vertical:false)
-        var ready=ScanProgress(); ready.normalTracking=true; ready.mapReady=true; ready.stableSeconds=3; ready.featureCount=620; ready.surfaces=[patch]
+        let wallPose=try Pose(simd_float4x4(simd_quatf(angle:-Float.pi/2,axis:SIMD3(1,0,0))))
+        let wall=SurfacePatch(id:UUID(),pose:wallPose,vertices:[Point3(.zero),Point3(SIMD3(2,0,0)),Point3(SIMD3(2,0,2.4)),Point3(SIMD3(0,0,2.4))],vertical:true)
+        let sidePose=try Pose(simd_float4x4(simd_quatf(angle:Float.pi/2,axis:SIMD3(0,0,1))))
+        let side=SurfacePatch(id:UUID(),pose:sidePose,vertices:[Point3(.zero),Point3(SIMD3(2.4,0,0)),Point3(SIMD3(2.4,0,2)),Point3(SIMD3(0,0,2))],vertical:true)
+        var ready=ScanProgress(); ready.normalTracking=true; ready.mapReady=true; ready.stableSeconds=3; ready.featureCount=620; ready.surfaces=[patch,wall,side]
+
         for i in 0..<4 {
             let angle=Float(i)*Float.pi/2+0.2
             ready.coverage.observe(position:SIMD3(Float(i)*0.6,0,0),forward:SIMD3(sin(angle),0,cos(angle)),reliable:true)
@@ -56,6 +61,40 @@ import RealityKit
         try await snapshot(AnyView(AuthenticationView()),store:store,name:"login",size:CGSize(width:375,height:667))
         try await snapshot(AnyView(NavigationStack { SettingsView() }),store:store,name:"settings",size:CGSize(width:375,height:667))
         try await snapshot(AnyView(ProjectDashboard()),store:store,name:"empty-projects",size:CGSize(width:375,height:667))
+    }
+    func testMiniatureRendersWithoutAnAnimationClock() throws {
+        let patch=SurfacePatch(id:UUID(),pose:.identity,vertices:[Point3(.zero),Point3(SIMD3(2,0,0)),Point3(SIMD3(2,0,2)),Point3(SIMD3(0,0,2))],vertical:false)
+        let renderer=ImageRenderer(content:ScanMiniature(surfaces:[patch],yaw:0).frame(width:220,height:220).background(.black))
+        renderer.scale=1
+        let image=try XCTUnwrap(renderer.uiImage?.cgImage)
+        let bytesPerRow=image.width*4
+        var pixels=[UInt8](repeating:0,count:image.height*bytesPerRow)
+        let count=pixels.withUnsafeMutableBytes { buffer -> Int in
+            guard let context=CGContext(data:buffer.baseAddress,width:image.width,height:image.height,bitsPerComponent:8,bytesPerRow:bytesPerRow,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0 }
+            context.draw(image,in:CGRect(x:0,y:0,width:image.width,height:image.height))
+            let bytes=buffer.bindMemory(to:UInt8.self)
+            return stride(from:0,to:bytes.count,by:4).filter { bytes[$0]>100 && bytes[$0+1]>100 && bytes[$0+2]>100 }.count
+        }
+        XCTAssertGreaterThan(count,1000,"Observed geometry must be visible before any animation tick")
+    }
+    func testSurfaceOutlineKeepsAnchorAcrossRefinements() async throws {
+        let room=Room(project_id:UUID(),name:"Test-only scan renderer")
+        let ar=ARController(room:room,mode:.mapping);ar.trackingNormal=true
+        var patch=SurfacePatch(id:UUID(),pose:.identity,vertices:[Point3(.zero),Point3(SIMD3(1,0,0)),Point3(SIMD3(1,0,1)),Point3(SIMD3(0,0,1))],vertical:false)
+        ar.updateSurfacePatch(patch)
+        let root=try XCTUnwrap(ar.view.scene.anchors.first)
+        XCTAssertEqual(root.children.count,8) // Four edges and subtle halos; no filled camera faces.
+        ar.updateSurfacePatch(patch)
+        XCTAssertTrue(root === ar.view.scene.anchors.first)
+        try await Task.sleep(for:.milliseconds(720))
+        patch.vertices[1]=Point3(SIMD3(2,0,0));patch.vertices[2]=Point3(SIMD3(2,0,1))
+        ar.updateSurfacePatch(patch)
+        XCTAssertEqual(ar.view.scene.anchors.count,1)
+        XCTAssertTrue(root === ar.view.scene.anchors.first)
+        let edge=try XCTUnwrap(root.findEntity(named:"edge-0"))
+        XCTAssertEqual(edge.transform.scale.z,2,accuracy:0.001)
+        ar.showSurfaceGuides=false;XCTAssertFalse(root.isEnabled)
+        ar.stop();XCTAssertTrue(ar.view.scene.anchors.isEmpty)
     }
     func testSmoothSeparatedStrokeAndImageRendering() async throws {
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -100,7 +139,7 @@ import RealityKit
         window.frame=CGRect(origin:.zero,size:size); window.rootViewController=host; window.makeKeyAndVisible()
         defer { window.isHidden=true; window.rootViewController=nil }
         host.view.frame=window.bounds; host.view.setNeedsLayout(); host.view.layoutIfNeeded()
-        try await Task.sleep(for:.milliseconds(180))
+        try await Task.sleep(for:.milliseconds(name.hasPrefix("scan-ready") ? 650 : 180))
         XCTAssertFalse(host.view.hasAmbiguousLayout,name)
         XCTAssertEqual(host.view.bounds.width,size.width,accuracy:1,name)
         let image=UIGraphicsImageRenderer(size:size).image { _ in host.view.drawHierarchy(in:CGRect(origin:.zero,size:size),afterScreenUpdates:true) }

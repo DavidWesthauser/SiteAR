@@ -1,6 +1,14 @@
 # Verification record — 2026-10-23
 
-## Current multi-view recognition update
+## Current animated scan update
+
+- Reviewed the supplied 6.5-second RoomPlan promotional clip at **three timestamps** (0.6, 3.2 and 5.8 seconds). No video/frames are included in the repository. The local Floor Planner app was inspected and is a separate 2D web tool, not an AR scanner.
+- Added progressive RealityKit outline tracing/halos, stable outline-entity reuse, and a shaded, camera-oriented miniature with patch appearance/refinement animations and Reduce Motion support.
+- Deterministic suite: **38 tests passed**, zero failures, including slab geometry/pose preservation and shortest-angle turning. Simulator: **4 tests passed**, zero failures: 30 compact/large-text layout captures, image/stroke persistence/rendering, outline anchor reuse/refinement, and a pixel-level check that the miniature renders without animation ticks. Final scan screenshots were visually reviewed.
+- Visual review found and fixed an initially invisible miniature: pre-existing geometry now renders immediately, with appearance animation reserved for new detections. A pixel regression test covers the first frame.
+- This revision has **not been deployed to the phone**. Live animation quality, performance, physical boundary alignment and recognition quality remain hardware checks. Animated patches are not RoomPlan window/furniture recognition.
+
+## Multi-view recognition update
 
 - Capture now requires four heading sectors and three positions at least 0.5 m apart, in addition to map/tracking/surface readiness. Regression tests distinguish walking with one viewing direction from spinning in place; neither alone completes capture.
 - Deterministic suite: **36 passed**, zero failures. Simulator layout/rendering and project/room/scan navigation: **3 focused tests passed**; the final layout-only rerun also passed, with compact and large-text scan screenshots visually checked after the last display adjustment.

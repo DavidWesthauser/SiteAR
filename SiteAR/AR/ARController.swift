@@ -45,6 +45,9 @@ struct FrozenDrawingFrame {
     @Published var showSurfaceGuides = true { didSet { refreshSurfaceVisuals() } }
     private var detectedSurfaces: [UUID: SurfacePatch] = [:]
     private var surfaceEntities: [UUID: AnchorEntity] = [:]
+    private var surfaceBirths:[UUID:Date]=[:]
+    private lazy var outlineMesh=MeshResource.generateBox(size:SIMD3<Float>(0.0035,0.0035,1))
+    private lazy var outlineHaloMesh=MeshResource.generateBox(size:SIMD3<Float>(0.013,0.013,1))
     private var lastProgressUpdate: TimeInterval = 0
     private var coverage = ScanCoverage()
     var annotations: [Annotation] = []
@@ -214,6 +217,7 @@ struct FrozenDrawingFrame {
                 coverage.observe(position:frame.camera.transform.columns.3.xyz,forward:-frame.camera.transform.columns.2.xyz,
                                  reliable:normal && (frame.worldMappingStatus == .mapped || frame.worldMappingStatus == .extending))
             }
+            progress.cameraYaw=atan2(-frame.camera.transform.columns.2.x,-frame.camera.transform.columns.2.z)
             progress.coverage=coverage
             scan = progress
             updateTarget()
@@ -265,6 +269,7 @@ struct FrozenDrawingFrame {
     func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
         for anchor in anchors {
             detectedSurfaces.removeValue(forKey: anchor.identifier)
+            surfaceBirths.removeValue(forKey:anchor.identifier)
             if let entity = surfaceEntities.removeValue(forKey: anchor.identifier) { view.scene.removeAnchor(entity) }
         }
     }
@@ -618,14 +623,51 @@ extension ARController {
         let boundary = plane.geometry.boundaryVertices.map(Point3.init)
         guard boundary.count >= 3, let pose = try? Pose(plane.transform) else { return }
         let patch = SurfacePatch(id: plane.identifier, pose: pose, vertices: boundary, vertical: plane.alignment == .vertical)
-        detectedSurfaces[patch.id] = patch
-        if let old = surfaceEntities.removeValue(forKey: patch.id) { view.scene.removeAnchor(old) }
-        let root = AnchorEntity(world: plane.transform)
-        let points = DrawingGeometry.outline(boundary,tolerance:0.005).map { $0.vector + SIMD3<Float>(0,0.003,0) }
-        for (a,b) in zip(points, points.dropFirst() + [points[0]]) { addSegment(a,b,to:root,color:.white,thickness:0.004) }
-        surfaceEntities[patch.id] = root; view.scene.addAnchor(root)
-        if targetedSurface == patch.id { refreshSurfaceColors() }
-        root.isEnabled = showSurfaceGuides && trackingNormal && (mode == .mapping || localization.state == .aligned)
+        updateSurfacePatch(patch)
+    }
+    // Same path is used by real ARPlaneAnchor events and deterministic renderer fixtures.
+    func updateSurfacePatch(_ patch:SurfacePatch) {
+        detectedSurfaces[patch.id]=patch
+        let root:AnchorEntity
+        let isNew=surfaceEntities[patch.id] == nil
+        if let existing=surfaceEntities[patch.id] { root=existing }
+        else {
+            root=AnchorEntity(world:SIMD3<Float>.zero)
+            surfaceEntities[patch.id]=root; surfaceBirths[patch.id]=Date();view.scene.addAnchor(root)
+        }
+        root.transform=Transform(matrix:patch.pose.matrix)
+        // Preserve the initial trace instead of tearing it down on every plane-update callback.
+        if !isNew,Date().timeIntervalSince(surfaceBirths[patch.id] ?? .distantPast)<0.7 { refreshSurfaceVisuals();return }
+        let points=DrawingGeometry.outline(patch.vertices,tolerance:0.005).map { $0.vector+SIMD3<Float>(0,0.003,0) }
+        guard points.count>=3 else { return }
+        var names=Set<String>()
+        for (i,pair) in zip(points,points.dropFirst()+[points[0]]).enumerated() {
+            let (a,b)=pair,length=simd_distance(a,b);guard length>0.002 else { continue }
+            let rotation=simd_quatf(from:SIMD3<Float>(0,0,1),to:(b-a)/length)
+            let target=Transform(scale:SIMD3(1,1,length),rotation:rotation,translation:(a+b)/2)
+            for halo in [true,false] {
+                let name="\(halo ? "halo" : "edge")-\(i)";names.insert(name)
+                let model:ModelEntity
+                if let existing=root.findEntity(named:name) as? ModelEntity { model=existing;model.stopAllAnimations() }
+                else {
+                    model=ModelEntity(mesh:halo ? outlineHaloMesh : outlineMesh,materials:[outlineMaterial(halo:halo,selected:patch.id == targetedSurface)])
+                    model.name=name;root.addChild(model)
+                }
+                model.transform=target
+                if isNew && !UIAccessibility.isReduceMotionEnabled {
+                    let start=Transform(scale:SIMD3(1,1,0.0001),rotation:rotation,translation:a)
+                    let trace=FromToByAnimation<Transform>(from:start,to:target,duration:0.35,timing:.easeInOut,bindTarget:.transform,fillMode:.both,delay:Double(i)/Double(points.count)*0.25)
+                    if let animation=try? AnimationResource.generate(with:trace) { model.playAnimation(animation) }
+                }
+            }
+        }
+        for child in Array(root.children) where !names.contains(child.name) { child.removeFromParent() }
+        refreshSurfaceVisuals()
+    }
+    private func outlineMaterial(halo:Bool,selected:Bool) -> UnlitMaterial {
+        var material=UnlitMaterial(color:selected ? .systemMint : .white)
+        if halo { material.blending = .transparent(opacity:.init(floatLiteral:0.1)) }
+        return material
     }
     private func addArrow(_ tail: SIMD3<Float>, _ tip: SIMD3<Float>, normal: SIMD3<Float>, to entity: Entity, color: UIColor) {
         let delta = tip-tail
@@ -647,13 +689,13 @@ extension ARController {
     private func refreshSurfaceColors() {
         for (id,entity) in surfaceEntities {
             for child in entity.children {
-                if let model=child as? ModelEntity { model.model?.materials=[UnlitMaterial(color:id == targetedSurface ? .systemMint : .white)] }
+                if let model=child as? ModelEntity { model.model?.materials=[outlineMaterial(halo:child.name.hasPrefix("halo"),selected:id == targetedSurface)] }
             }
         }
     }
     private func hideSurfaces() { for entity in surfaceEntities.values { entity.isEnabled = false } }
     private func clearSurfaces() {
         for entity in surfaceEntities.values { view.scene.removeAnchor(entity) }
-        surfaceEntities = [:]; detectedSurfaces = [:]
+        surfaceEntities = [:]; detectedSurfaces = [:]; surfaceBirths = [:]
     }
 }
