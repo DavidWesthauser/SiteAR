@@ -41,7 +41,11 @@ public struct Room: Codable, Identifiable, Equatable, Sendable {
     }
 }
 public enum AnnotationKind: String, Codable, CaseIterable, Sendable { case marker, text, area, line, arrow, image }
-public enum TaskStatus: String, Codable, CaseIterable, Sendable { case todo, inProgress = "in_progress", completed }
+public enum TaskStatus: String, Codable, CaseIterable, Sendable {
+    case todo, inProgress = "in_progress", completed
+    public var label:String { switch self { case .todo:return "To do";case .inProgress:return "In progress";case .completed:return "Completed" } }
+    public var symbol:String { switch self { case .todo:return "circle";case .inProgress:return "clock";case .completed:return "checkmark.circle.fill" } }
+}
 public struct SpatialImage: Codable, Equatable, Sendable {
     public var path: String
     public var width: Float

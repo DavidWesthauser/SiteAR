@@ -14,6 +14,37 @@ final class SpatialTests: XCTestCase {
     func assertMatrix(_ a: Pose, _ b: Pose, file: StaticString = #filePath, line: UInt = #line) {
         for (x,y) in zip(a.elements,b.elements) { XCTAssertEqual(x,y,accuracy: 0.0001,file:file,line:line) }
     }
+    func testViewCaptureRejectsDuplicatesAndStaleCallbacks() throws {
+        var request=ViewCaptureRequest()
+        let first=try XCTUnwrap(request.begin());XCTAssertTrue(request.isPending)
+        XCTAssertNil(request.begin())
+        request.cancel();let second=try XCTUnwrap(request.begin())
+        XCTAssertFalse(request.accepts(first));XCTAssertFalse(request.finish(first))
+        XCTAssertTrue(request.isPending);XCTAssertTrue(request.accepts(second))
+        XCTAssertTrue(request.finish(second));XCTAssertFalse(request.isPending)
+        XCTAssertFalse(request.finish(second))
+    }
+    func testSurfaceSettlingDistinguishesDepthFromTangentialOriginChanges() throws {
+        var quality=SurfaceStability()
+        XCTAssertFalse(quality.isReady(at:1))
+        quality.observe(.identity,at:0)
+        XCTAssertFalse(quality.isReady(at:0.59));XCTAssertTrue(quality.isReady(at:0.6))
+        quality.observe(try transform(SIMD3(0.4,0,0.5)),at:0.7)
+        XCTAssertTrue(quality.isReady(at:0.7)) // The same plane with a shifted origin.
+        quality.observe(try transform(SIMD3(0,0.03,0)),at:0.8)
+        XCTAssertFalse(quality.isReady(at:1));XCTAssertTrue(quality.isReady(at:1.5))
+        let tilted=try Pose(simd_float4x4(simd_quatf(angle:0.1,axis:SIMD3(1,0,0))))
+        quality.observe(tilted,at:1.6)
+        XCTAssertFalse(quality.isReady(at:1.7));XCTAssertTrue(quality.isReady(at:2.3))
+        quality.observe(.identity,at:0) // A fresh session clock cannot reuse old evidence.
+        XCTAssertFalse(quality.isReady(at:0.1))
+        quality.observe(.identity,at:.nan);XCTAssertFalse(quality.isReady(at:10))
+    }
+    func testFrozenCaptureRejectsCameraMotionAndRotation() throws {
+        XCTAssertTrue(CameraCaptureQuality.isSteady(from:.identity,to:try transform(SIMD3(0.005,0,0),yaw:0.01)))
+        XCTAssertFalse(CameraCaptureQuality.isSteady(from:.identity,to:try transform(SIMD3(0.1,0,0))))
+        XCTAssertFalse(CameraCaptureQuality.isSteady(from:.identity,to:try transform(.zero,yaw:0.1)))
+    }
     func testMiniatureSlabsKeepRoomPoseAndDoNotInventSurfaces() throws {
         let pose=try transform(SIMD3(3,2,-1))
         let patch=SurfacePatch(id:UUID(),pose:pose,vertices:[Point3(.zero),Point3(SIMD3(2,0,0)),Point3(SIMD3(2,0,1)),Point3(SIMD3(0,0,1))],vertical:false)

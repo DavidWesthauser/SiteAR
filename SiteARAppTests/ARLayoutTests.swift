@@ -31,14 +31,21 @@ import RealityKit
             let angle=Float(i)*Float.pi/2+0.2
             ready.coverage.observe(position:SIMD3(Float(i)*0.6,0,0),forward:SIMD3(sin(angle),0,cos(angle)),reliable:true)
         }
-        let configurations:[(String,ARMode)] = [("scan-start",.mapping),("scan-ready",.mapping),("recognizing",.walkthrough),("tracking-lost",.editing),("draw-editor",.editing),("area-editor",.editing),("image-empty",.editing),("image-loaded",.editing),("worker-aligned",.walkthrough),("recovery",.walkthrough)]
+        let configurations:[(String,ARMode)] = [("scan-start",.mapping),("scan-ready",.mapping),("scan-reduced",.mapping),("recognizing",.walkthrough),("tracking-lost",.editing),("draw-editor",.editing),("area-editor",.editing),("image-empty",.editing),("image-loaded",.editing),("worker-aligned",.walkthrough),("recovery",.walkthrough),("motion-limited",.editing),("features-limited",.editing)]
         for (name,mode) in configurations {
             let ar=ARController(room:room,mode:mode)
-            if name=="scan-ready" { ar.scan=ready; ar.trackingNormal=true; ar.mapped=true }
+            if name=="scan-ready" || name=="scan-reduced" {
+                ar.scan=ready; ar.trackingNormal=true; ar.mapped=true
+                if name=="scan-reduced" { ar.scan.renderingReduced=true;ar.scan.observedSurfaceCount=128 }
+            }
             if ["draw-editor","area-editor","image-empty","image-loaded","worker-aligned"].contains(name) {
                 ar.trackingNormal=true; ar.localization.propose(.identity,method:.map); ar.confirm()
             }
             if name=="tracking-lost" { ar.localization.lose() }
+            if name=="motion-limited" || name=="features-limited" {
+                let issue:TrackingIssue=name=="motion-limited" ? .excessiveMotion : .insufficientFeatures
+                ar.ready=true;ar.updateTracking(issue);ar.localization.searching();ar.guidance=issue.instruction
+            }
             if name=="recognizing" { ar.localization.searching() }
             if name=="area-editor" { ar.tool = .area }
             if name.hasPrefix("image-") { ar.tool = .image }
@@ -47,7 +54,7 @@ import RealityKit
             for size in [CGSize(width:375,height:667),CGSize(width:375,height:812)] {
                 try await snapshot(AnyView(ARScreen(controller:ar,manager:mode != .walkthrough)),store:store,name:"\(name)-\(Int(size.height))",size:size)
             }
-            if ["draw-editor","image-loaded","scan-ready"].contains(name) {
+            if ["draw-editor","image-loaded","scan-ready","scan-reduced"].contains(name) {
                 try await snapshot(AnyView(ARScreen(controller:ar,manager:true).environment(\.dynamicTypeSize,.accessibility1)),store:store,name:"\(name)-large-text",size:CGSize(width:375,height:667))
             }
             ar.stop()
@@ -61,6 +68,59 @@ import RealityKit
         try await snapshot(AnyView(AuthenticationView()),store:store,name:"login",size:CGSize(width:375,height:667))
         try await snapshot(AnyView(NavigationStack { SettingsView() }),store:store,name:"settings",size:CGSize(width:375,height:667))
         try await snapshot(AnyView(ProjectDashboard()),store:store,name:"empty-projects",size:CGSize(width:375,height:667))
+        store.projects=[project];store.rooms=[room]
+        var complete=note;complete.id=UUID();complete.status = .completed;complete.title="Finished instruction"
+        var active=note;active.id=UUID();active.status = .inProgress;active.priority=2;active.title="High priority instruction"
+        store.annotations=[note,complete,active]
+        try await snapshot(AnyView(ProjectDashboard()),store:store,name:"populated-projects",size:CGSize(width:375,height:667))
+        try await snapshot(AnyView(NavigationStack { ProjectDetail(project:project) }),store:store,name:"project-rooms",size:CGSize(width:375,height:667))
+        try await snapshot(AnyView(NavigationStack { RoomDetail(project:project,initialRoom:room) }),store:store,name:"room-progress",size:CGSize(width:375,height:667))
+        try await snapshot(AnyView(NavigationStack { RoomDetail(project:project,initialRoom:room) }.environment(\.dynamicTypeSize,.accessibility1)),store:store,name:"room-progress-large-text",size:CGSize(width:375,height:667))
+        try await snapshot(AnyView(NavigationStack { TrackingTipsView() }),store:store,name:"tracking-tips",size:CGSize(width:375,height:667))
+    }
+    func testTrackingLossEndsAnActiveStrokeWithoutDiscardingRoomData() {
+        let room=Room(project_id:UUID(),name:"Tracking fixture")
+        let ar=ARController(room:room,mode:.editing)
+        let item=Annotation(room:room,kind:.line,pose:.identity,points:[Point3(.zero),Point3(SIMD3(1,0,0))],title:"Saved drawing",detail:"")
+        ar.annotations=[item];ar.updateTracking(.none);ar.beginStroke()
+        XCTAssertTrue(ar.lineDraft.isDrawing)
+        ar.updateTracking(.insufficientFeatures)
+        XCTAssertFalse(ar.lineDraft.isDrawing);XCTAssertFalse(ar.trackingNormal)
+        XCTAssertEqual(ar.annotations,[item]);XCTAssertEqual(ar.trackingIssue,.insufficientFeatures)
+        ar.updateTracking(.none)
+        XCTAssertTrue(ar.trackingNormal);XCTAssertFalse(ar.lineDraft.isDrawing) // Must start a fresh touch.
+        ar.stop()
+    }
+    func testLongScanRenderingAndMemoryFallbackStayBounded() throws {
+        let room=Room(project_id:UUID(),name:"Long scan fixture")
+        let ar=ARController(room:room,mode:.mapping);ar.trackingNormal=true
+        let vertices=(0..<256).map { i -> Point3 in
+            let angle=Float(i)*2*Float.pi/256
+            return Point3(SIMD3(cos(angle),0,sin(angle)))
+        }
+        for i in 0..<600 {
+            var matrix=matrix_identity_float4x4;matrix.columns.3.x=Float(i)*0.1
+            ar.updateSurfacePatch(SurfacePatch(id:UUID(),pose:try Pose(matrix),vertices:vertices,vertical:false))
+        }
+        XCTAssertEqual(ar.cachedSurfaceCount,128)
+        ar.renderScanSurfaces()
+        XCTAssertEqual(ar.view.scene.anchors.count,24)
+        XCTAssertEqual(ar.view.scene.anchors.reduce(0,{$0+$1.children.count}),48)
+        let instruction=Annotation(room:room,kind:.line,pose:.identity,points:[Point3(.zero),Point3(SIMD3(1,0,0))],title:"Keep this drawing",detail:"")
+        ar.annotations=[instruction]
+        var distantPose=matrix_identity_float4x4;distantPose.columns.3.x=1000
+        let targetID=UUID(),pose=try Pose(distantPose)
+        ar.updateSurfacePatch(SurfacePatch(id:targetID,pose:pose,vertices:vertices,vertical:false)) // Excluded from the nearest metadata cache.
+        XCTAssertEqual(ar.cachedSurfaceCount,128)
+        XCTAssertFalse(ar.placementSurfaceIsReady(id:targetID,pose:pose,at:0))
+        XCTAssertTrue(ar.placementSurfaceIsReady(id:targetID,pose:pose,at:0.7))
+        ar.reduceScanLoad()
+        XCTAssertTrue(ar.view.scene.anchors.isEmpty);XCTAssertTrue(ar.renderingReduced)
+        XCTAssertEqual(ar.annotations,[instruction]);XCTAssertEqual(ar.cachedSurfaceCount,128)
+        ar.renderScanSurfaces()
+        XCTAssertEqual(ar.view.scene.anchors.count,12)
+        XCTAssertEqual(ar.view.scene.anchors.reduce(0,{$0+$1.children.count}),12)
+        ar.stop()
     }
     func testMiniatureRendersWithoutAnAnimationClock() throws {
         let patch=SurfacePatch(id:UUID(),pose:.identity,vertices:[Point3(.zero),Point3(SIMD3(2,0,0)),Point3(SIMD3(2,0,2)),Point3(SIMD3(0,0,2))],vertical:false)
@@ -81,18 +141,21 @@ import RealityKit
         let room=Room(project_id:UUID(),name:"Test-only scan renderer")
         let ar=ARController(room:room,mode:.mapping);ar.trackingNormal=true
         var patch=SurfacePatch(id:UUID(),pose:.identity,vertices:[Point3(.zero),Point3(SIMD3(1,0,0)),Point3(SIMD3(1,0,1)),Point3(SIMD3(0,0,1))],vertical:false)
-        ar.updateSurfacePatch(patch)
+        ar.updateSurfacePatch(patch);ar.renderScanSurfaces()
         let root=try XCTUnwrap(ar.view.scene.anchors.first)
-        XCTAssertEqual(root.children.count,8) // Four edges and subtle halos; no filled camera faces.
-        ar.updateSurfacePatch(patch)
+        XCTAssertEqual(root.children.count,2) // One batched outline plus one halo, regardless of edge count.
+        ar.updateSurfacePatch(patch);ar.renderScanSurfaces()
         XCTAssertTrue(root === ar.view.scene.anchors.first)
         try await Task.sleep(for:.milliseconds(720))
         patch.vertices[1]=Point3(SIMD3(2,0,0));patch.vertices[2]=Point3(SIMD3(2,0,1))
-        ar.updateSurfacePatch(patch)
+        ar.updateSurfacePatch(patch);ar.renderScanSurfaces()
         XCTAssertEqual(ar.view.scene.anchors.count,1)
         XCTAssertTrue(root === ar.view.scene.anchors.first)
-        let edge=try XCTUnwrap(root.findEntity(named:"edge-0"))
-        XCTAssertEqual(edge.transform.scale.z,2,accuracy:0.001)
+        let edge=try XCTUnwrap(root.findEntity(named:"edge"))
+        XCTAssertEqual(edge.visualBounds(relativeTo:root).extents.x,2,accuracy:0.01)
+        patch.vertices=[Point3(.zero),Point3(SIMD3(1,0,0)),Point3(SIMD3(2,0,0))]
+        ar.updateSurfacePatch(patch);ar.renderScanSurfaces()
+        XCTAssertTrue(root.children.isEmpty) // Invalid refinement cannot leave a stale valid outline.
         ar.showSurfaceGuides=false;XCTAssertFalse(root.isEnabled)
         ar.stop();XCTAssertTrue(ar.view.scene.anchors.isEmpty)
     }

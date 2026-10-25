@@ -26,6 +26,8 @@ public struct ScanProgress: Equatable, Sendable {
     public var surfaces: [SurfacePatch] = []
     public var coverage = ScanCoverage()
     public var cameraYaw:Float=0
+    public var observedSurfaceCount=0
+    public var renderingReduced=false
     public init() {}
     public var verticalCount: Int { surfaces.filter(\.vertical).count }
     public var horizontalCount: Int { surfaces.count - verticalCount }
@@ -56,8 +58,8 @@ public struct ScanCoverage: Equatable, Sendable {
         }
     }
     public var instruction: String {
-        if positions.count<3 { return "Gehe langsam zu weiteren Stellen im Raum und schau auf Kanten und strukturierte Flächen." }
-        if headings.count<4 { return "Schau auch in die anderen Richtungen. Erfasse jede Raumseite aus mehreren Winkeln." }
-        return "Blicke beim Zurückgehen auf bereits erfasste Details, damit sich die Karte verbindet."
+        if positions.count<3 { return "Walk slowly to more positions in the room, looking at corners and textured surfaces." }
+        if headings.count<4 { return "Look in the remaining directions. Capture each side of the room from overlapping viewpoints." }
+        return "Look back at captured details as you return, so the room map connects."
     }
 }

@@ -17,6 +17,7 @@ struct ARScreen: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var phase
+    @Environment(\.dynamicTypeSize) private var typeSize
     @StateObject private var ar: ARController
     let manager: Bool
     private let startSession: Bool
@@ -40,6 +41,7 @@ struct ARScreen: View {
     @State private var markerExpanded=false
     @State private var showingWorkDetails=false
     @State private var showingPlacement=false
+    @State private var restartingScan=false
     init(room: Room, mode: ARMode, manager: Bool) {
         self.manager = manager; startSession=true
         _ar = StateObject(wrappedValue: ARController(room: room, mode: mode))
@@ -50,6 +52,7 @@ struct ARScreen: View {
     }
     private var statusTitle: String {
         if mode == .mapping { return ar.scan.canFinish ? "Ready to draw" : "Scanning room" }
+        if !ar.trackingNormal && ar.ready { return ar.trackingIssue.title }
         switch ar.localization.state {
         case .aligned: return "Room recognized"
         case .failed: return "Room not recognized"
@@ -94,7 +97,7 @@ struct ARScreen: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
                             if mode == .mapping {
-                                DisclosureGroup("Referenzmarker (optional)",isExpanded:$markerExpanded) { markerTools }.font(.caption)
+                                DisclosureGroup("Reference marker (optional)",isExpanded:$markerExpanded) { markerTools }.font(.caption)
                             } else {
                                 if ar.localization.state == .aligned {
                                     if mode == .editing {
@@ -106,7 +109,7 @@ struct ARScreen: View {
                                     } else { Toggle("Show surface outlines", isOn: $ar.showSurfaceGuides).font(.caption) }
                                 } else if ar.localization.state != .verifying {
                                     if ar.localization.state == .failed {
-                                        Button("Ohne Neustart weitersuchen") { ar.continueSearching() }.buttonStyle(.borderedProminent)
+                                        Button("Keep searching") { ar.continueSearching() }.buttonStyle(.borderedProminent)
                                     }
                                     Button("Scan room again") { ar.startMap() }.buttonStyle(.borderedProminent).disabled(!ar.ready)
                                 }
@@ -123,13 +126,13 @@ struct ARScreen: View {
                     }.scrollIndicators(.visible).frame(maxHeight: mode == .mapping ? (markerExpanded ? 200 : 56) : (mode == .walkthrough ? 100 : 200))
                     if mode == .mapping {
                         Divider()
-                        Button { saveRoom() } label: { Label("Scan abschließen",systemImage:"pencil.tip").font(.headline).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth:.infinity,minHeight:36) }
+                        Button { saveRoom() } label: { Label("Finish scan",systemImage:"pencil.tip").font(.headline).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth:.infinity,minHeight:36) }
                             .buttonStyle(.borderedProminent).disabled(!ar.scan.canFinish || saving).accessibilityIdentifier("scan.finish").padding(12)
                     }
                     if mode == .editing && ar.localization.state == .aligned && !scanMore { Divider(); saveBar.padding(.horizontal,12).padding(.vertical,8) }
                     }.frame(maxWidth:.infinity).background(.regularMaterial,in:RoundedRectangle(cornerRadius:14))
                 }
-                if mode != .mapping && ar.localization.state != .verifying { Button("Werkzeuge",systemImage:tools ? "chevron.down" : "chevron.up") { tools.toggle() }.font(.caption).padding(.horizontal,12).frame(minHeight:44).background(.regularMaterial,in:Capsule()).accessibilityLabel(tools ? "Werkzeuge ausblenden" : "Werkzeuge einblenden") }
+                if mode != .mapping && ar.localization.state != .verifying { Button("Tools",systemImage:tools ? "chevron.down" : "chevron.up") { tools.toggle() }.font(.caption).padding(.horizontal,12).frame(minHeight:44).background(.regularMaterial,in:Capsule()).accessibilityLabel(tools ? "Hide tools" : "Show tools") }
             }.padding(.horizontal, 12).padding(.bottom, 8)
             }
             if saving { Color.black.opacity(0.3).ignoresSafeArea(); ProgressView("Saving room…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) }
@@ -146,7 +149,7 @@ struct ARScreen: View {
             imageLoading=true
             Task {
                 defer { imageLoading=false }
-                do { guard let data=try await item.loadTransferable(type:Data.self) else { throw AppError.message("Bild konnte nicht geladen werden.") }; try await ar.setImage(data) }
+                do { guard let data=try await item.loadTransferable(type:Data.self) else { throw AppError.message("Could not load this image.") }; try await ar.setImage(data) }
                 catch { ar.error=error.localizedDescription }
             }
         }
@@ -193,27 +196,37 @@ struct ARScreen: View {
     private var scanOverlay: some View {
         VStack(spacing:12) {
             HStack {
-                Button("Abbrechen") { closing=true }.frame(minWidth:44,minHeight:44).accessibilityLabel("Close")
+                Button("Cancel") { closing=true }.frame(minWidth:44,minHeight:44).accessibilityLabel("Close")
                 Spacer()
                 Button { saveRoom() } label: {
-                    Text("Fertig").fontWeight(.semibold).frame(minWidth:64,minHeight:44)
+                    Text("Finish").fontWeight(.semibold).frame(minWidth:64,minHeight:44)
                 }.disabled(!ar.scan.canFinish || saving).accessibilityIdentifier("scan.finish")
             }.padding(.horizontal,8).background(.black.opacity(0.3),in:RoundedRectangle(cornerRadius:16))
             GeometryReader { proxy in
                 Color.clear.preference(key:CameraAimPreference.self,value:CGPoint(x:proxy.frame(in:.global).midX,y:proxy.frame(in:.global).midY))
             }.frame(minHeight:44).allowsHitTesting(false)
             ScanOverview(progress:ar.scan)
-            Text(ar.scan.canFinish ? "Prüfe die Umrisse an echten Kanten." : ar.guidance)
-                .font(.subheadline.weight(.medium)).multilineTextAlignment(.center).fixedSize(horizontal:false,vertical:true)
+            Text(ar.scan.canFinish ? "Check the outlines against physical edges." : ar.guidance)
+                .font(typeSize.isAccessibilitySize ? .caption.weight(.medium) : .subheadline.weight(.medium)).multilineTextAlignment(.center).lineLimit(3).fixedSize(horizontal:false,vertical:true)
                 .padding(12).frame(maxWidth:.infinity).background(.black.opacity(0.55),in:RoundedRectangle(cornerRadius:14))
-            Button("Optionen",systemImage:"slider.horizontal.3") { markerExpanded=true }
+            Button("Options",systemImage:"slider.horizontal.3") { markerExpanded=true }
                 .font(.subheadline).frame(minHeight:44).padding(.horizontal,16).background(.black.opacity(0.4),in:Capsule())
         }.foregroundStyle(.white).padding(.horizontal,16).padding(.bottom,8)
         .sheet(isPresented:$markerExpanded) {
             NavigationStack {
-                Form { Section("Referenzmarker (optional)") { markerTools } }
-                    .navigationTitle("Scan-Optionen").navigationBarTitleDisplayMode(.inline)
-                    .toolbar { ToolbarItem(placement:.confirmationAction) { Button("Fertig") { markerExpanded=false } } }
+                Form {
+                    Section("Tracking") {
+                        if ar.renderingReduced { Text("Scan detail was reduced to limit rendering work. Finish this room before scanning another. Your map and drawings are retained.").font(.footnote) }
+                        Text(ar.trackingIssue == .none ? "Tracking is stable. Continue scanning from overlapping viewpoints." : ar.trackingIssue.instruction)
+                        Button("Restart scan",role:.destructive) { restartingScan=true }
+                    }
+                    Section("Reference marker (optional)") { markerTools }
+                }
+                .confirmationDialog("Restart and discard this unsaved scan?",isPresented:$restartingScan,titleVisibility:.visible) {
+                    Button("Restart scan",role:.destructive) { markerExpanded=false;ar.startMapping() }
+                }
+                    .navigationTitle("Scan options").navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement:.confirmationAction) { Button("Done") { markerExpanded=false } } }
             }
         }
     }
@@ -237,63 +250,63 @@ struct ARScreen: View {
         VStack(alignment: .leading) {
             Button(ar.tool == .area ? "Add corner at crosshair" : "Place at crosshair", systemImage: "scope") { ar.capture(distance: manualDistance ? Float(distance) : nil) }
                 .buttonStyle(.bordered).disabled(!ar.trackingNormal || (manualDistance && (!distance.isFinite || distance < 0.1 || distance > 10)))
-            Button("Abstand einstellen",systemImage:"ruler") { showingPlacement=true }.font(.caption)
+            Button("Placement settings",systemImage:"ruler") { showingPlacement=true }.font(.caption)
         }
     }
     private var editorTools: some View {
         VStack(alignment:.leading,spacing:10) {
             if let replacing { Text("Repositioning: \(replacing.title)").font(.headline); Button("Cancel") { self.replacing=nil; ar.clearDraft(); ar.resumeCamera(); title=""; detail="" } }
-            Picker("Werkzeug",selection:Binding(get:{ar.tool},set:selectTool)) {
-                Text("Zeichnen").tag(AnnotationKind.line); Text("Fläche").tag(AnnotationKind.area); Text("Bild").tag(AnnotationKind.image)
+            Picker("Tool",selection:Binding(get:{ar.tool},set:selectTool)) {
+                Text("Draw").tag(AnnotationKind.line); Text("Area").tag(AnnotationKind.area); Text("Image").tag(AnnotationKind.image)
             }.pickerStyle(.segmented).accessibilityIdentifier("drawing.tools")
             ViewThatFits(in:.horizontal) {
                 HStack { lockButton.fixedSize(); if ar.tool == .image { Spacer(); imageButton.fixedSize() } }
                 VStack(alignment:.leading,spacing:8) { lockButton; if ar.tool == .image { imageButton } }
             }
             if ar.tool == .image {
-                if imageLoading { ProgressView("Bild wird geladen…") }
+                if imageLoading { ProgressView("Loading image…") }
                 else if let image=ar.draftImage {
                     HStack(spacing:10) {
                         Image(uiImage:image).resizable().scaledToFit().frame(width:44,height:40).accessibilityHidden(true)
-                        VStack(alignment:.leading) { Text("Breite").font(.caption); Text("\(ar.imageWidth,format:.number.precision(.fractionLength(2))) m").font(.caption.monospacedDigit()) }
+                        VStack(alignment:.leading) { Text("Width").font(.caption); Text("\(ar.imageWidth,format:.number.precision(.fractionLength(2))) m").font(.caption.monospacedDigit()) }
                         Spacer(minLength:4)
                         let maximum=min(Float(3),3/Float(image.size.height/image.size.width))
-                        Stepper("Bildbreite",value:$ar.imageWidth,in:min(0.05,maximum)...maximum,step:0.05).labelsHidden().fixedSize().accessibilityLabel("Bildbreite")
+                        Stepper("Image width",value:$ar.imageWidth,in:min(0.05,maximum)...maximum,step:0.05).labelsHidden().fixedSize().accessibilityLabel("Image width")
                     }
                 }
-                Text("Bild auf der Oberfläche antippen und platzieren.").font(.caption).fixedSize(horizontal:false,vertical:true)
-                Button("Aus Datei auswählen",systemImage:"folder") { importingDrawingImage=true; importing=true }.font(.subheadline)
+                Text("Tap a detected surface to place the image.").font(.caption).fixedSize(horizontal:false,vertical:true)
+                Button("Choose from Files",systemImage:"folder") { importingDrawingImage=true; importing=true }.font(.subheadline)
             } else {
-                Text(ar.tool == .line ? "Ziehen zum Zeichnen. Loslassen beendet den Strich." : "Ecken einer Fläche antippen.").font(.caption)
+                Text(ar.tool == .line ? "Drag to draw. Lift your finger to end the stroke." : "Tap the corners of an area.").font(.caption)
             }
             if ar.drawingPlane == nil {
                 Label(ar.surfaceTarget,systemImage:"scope").font(.caption).foregroundStyle(.secondary)
             } else {
-                Label("Zeichenebene fixiert",systemImage:"lock.fill").font(.caption).foregroundStyle(.secondary)
+                Label("Drawing surface locked",systemImage:"lock.fill").font(.caption).foregroundStyle(.secondary)
             }
-            if ar.tool != .line { DisclosureGroup("Genaue Platzierung") { captureControls } }
-            Button("Arbeitsanweisung",systemImage:"text.alignleft") { showingWorkDetails=true }.font(.subheadline).frame(minHeight:44)
+            if ar.tool != .line { DisclosureGroup("Precise placement") { captureControls } }
+            Button("Work details",systemImage:"text.alignleft") { showingWorkDetails=true }.font(.subheadline).frame(minHeight:44)
         }
     }
     private var lockButton: some View {
-        Button(ar.frozenFrame == nil ? "Ansicht fixieren" : "Live-Kamera",systemImage:ar.frozenFrame == nil ? "viewfinder" : "camera") { ar.freezeView() }
-            .font(.subheadline).lineLimit(1).disabled(!ar.trackingNormal).accessibilityIdentifier("drawing.lock").frame(minHeight:44)
+        Button(ar.lockingView ? "Locking…" : (ar.frozenFrame == nil ? "Lock view" : "Live camera"),systemImage:ar.frozenFrame == nil ? "viewfinder" : "camera") { ar.freezeView() }
+            .font(.subheadline).lineLimit(1).disabled(ar.lockingView || !ar.trackingNormal || (ar.frozenFrame == nil && !ar.targetReady)).accessibilityIdentifier("drawing.lock").frame(minHeight:44)
     }
     private var imageButton: some View {
-        Button("Bild wählen",systemImage:"photo") { pickingPhoto=true }.font(.subheadline).lineLimit(1).frame(minHeight:44).accessibilityIdentifier("drawing.image")
+        Button("Choose image",systemImage:"photo") { pickingPhoto=true }.font(.subheadline).lineLimit(1).frame(minHeight:44).accessibilityIdentifier("drawing.image")
     }
     private var saveBar: some View {
         HStack(spacing:10) {
             Button { ar.undoPoint() } label: { Image(systemName:"arrow.uturn.backward").frame(width:22,height:22) }
-                .buttonStyle(.bordered).frame(minWidth:44,minHeight:44).accessibilityLabel(ar.tool == .line ? "Strich zurück" : "Zurück").disabled(ar.draft.isEmpty)
+                .buttonStyle(.bordered).frame(minWidth:44,minHeight:44).accessibilityLabel(ar.tool == .line ? "Undo stroke" : "Undo").disabled(ar.draft.isEmpty)
             Button { ar.clearDraft() } label: { Image(systemName:"trash").frame(width:22,height:22) }
                 .buttonStyle(.bordered).frame(minWidth:44,minHeight:44).accessibilityLabel("Leeren").disabled(ar.draft.isEmpty && ar.drawingPlane == nil)
-            Button { saveDrawing() } label: { Label("Speichern",systemImage:"checkmark").font(.headline).lineLimit(1).minimumScaleFactor(0.75).frame(maxWidth:.infinity,minHeight:36) }
+            Button { saveDrawing() } label: { Label("Save",systemImage:"checkmark").font(.headline).lineLimit(1).minimumScaleFactor(0.75).frame(maxWidth:.infinity,minHeight:36) }
                 .buttonStyle(.borderedProminent).accessibilityIdentifier("drawing.save").disabled(ar.draft.isEmpty || saving || imageLoading)
         }
     }
     private func selectTool(_ kind:AnnotationKind) {
-        guard kind == ar.tool || ar.draft.isEmpty else { ar.error="Bitte die aktuelle Zeichnung zuerst speichern oder leeren."; return }
+        guard kind == ar.tool || ar.draft.isEmpty else { ar.error="Save or clear the current drawing first."; return }
         ar.tool=kind
         if kind == .image && ar.draftImage == nil { pickingPhoto=true }
     }
@@ -309,7 +322,7 @@ struct ARScreen: View {
                     let path="\(room.project_id.uuidString.lowercased())/\(room.id.uuidString.lowercased())/\(UUID().uuidString.lowercased()).png"
                     attachment=SpatialImage(path:path,width:ar.imageWidth,height:ar.imageHeight)
                 }
-                var item = try ar.makeAnnotation(kind: ar.tool, title: label.isEmpty ? (ar.tool == .area ? "Fläche" : (ar.tool == .image ? "Bild" : "Zeichnung")) : label, detail: detail, priority: priority,image:attachment)
+                var item = try ar.makeAnnotation(kind: ar.tool, title: label.isEmpty ? (ar.tool == .area ? "Area marking" : (ar.tool == .image ? "Image" : "Drawing")) : label, detail: detail, priority: priority,image:attachment)
                 if let attachment,let data=ar.imageData {
                     try await store.uploadAsset(path:attachment.path,data:data,type:"image/png"); ar.cacheDraftImage(path:attachment.path)
                 }
