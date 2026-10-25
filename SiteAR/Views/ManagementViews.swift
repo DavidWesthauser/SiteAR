@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct AuthenticationView: View {
     @EnvironmentObject var store: Store
@@ -29,8 +30,10 @@ struct ProjectDashboard: View {
     @EnvironmentObject var store: Store
     @State private var creating = false; @State private var name = ""
     @State private var query=""
+    @State private var importing = false
+    @State private var path: [UUID] = []
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 if store.projects.isEmpty {
                     ContentUnavailableView {
@@ -53,12 +56,31 @@ struct ProjectDashboard: View {
             }
             .navigationTitle("Projects").accessibilityIdentifier("projects.list")
             .searchable(text:$query,prompt:"Find a project")
+            .onChange(of: store.projects.count) { previous, current in
+                if current > previous { query = "" }
+            }
             .navigationDestination(for: UUID.self) { id in
                 if let project = store.projects.first(where: { $0.id == id }) { ProjectDetail(project: project) }
             }
             .toolbar {
+                if store.isLocalMode {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Import project", systemImage: "square.and.arrow.down") { importing = true }
+                            .disabled(store.busy).accessibilityIdentifier("projects.import")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) { Button("New project", systemImage: "plus") { name = ""; creating = true }.accessibilityIdentifier("projects.new") }
                 ToolbarItem(placement: .topBarLeading) { NavigationLink { SettingsView() } label: { Image(systemName: "gearshape") } }
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.siteARProject]) { result in
+                switch result {
+                case .success(let url):
+                    store.run {
+                        let project = try await store.importProjectFile(from: url)
+                        query = ""; path.append(project.id)
+                    }
+                case .failure(let error): store.error = error.localizedDescription
+                }
             }
             .alert("New project", isPresented: $creating) {
                 TextField("Project name", text: $name)
@@ -96,6 +118,13 @@ struct ProjectDetail: View {
                 if manager { Button("Add room", systemImage: "plus") { name = ""; addRoom = true }.accessibilityIdentifier("rooms.new") }
             }
             if manager {
+                if store.isLocalMode {
+                    Section("Share a copy") {
+                        ProjectFileShareButton(project: project)
+                        Text("Send the file with AirDrop or Files. It includes room maps, images and instructions. Importing creates an editable copy; later changes are not synchronized.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
                 if !store.isLocalMode { Section("Grant worker access") {
                     TextField("Registered worker email", text: $email).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
                     Button("Share project") { store.run { try await store.client().rpc("share_project", arguments: ["project": project.id.uuidString, "worker_email": email]); email = "" } }.disabled(email.isEmpty)
@@ -246,7 +275,7 @@ struct SettingsView: View {
             if store.isLocalMode { Section("On this device") { Text("No account connected"); Text("Your projects, room maps and instructions are saved on this device. Sharing becomes available when cloud accounts are connected.").font(.footnote) } }
             else { Section("Account") { Text(store.backend?.user?.email ?? "Signed in"); Button("Sign out", role: .destructive) { store.run { await store.backend?.signOut(); store.projects = []; store.rooms = []; store.annotations = []; store.signedIn = false } } } }
             Section { NavigationLink { TrackingTipsView() } label: { Label("Camera-only scanning tips",systemImage:"camera.viewfinder") } }
-            Section("SiteAR 1.0") { Text("Spatial work instructions · iOS 17+"); Text("Room maps and marker images are private project assets. Accuracy depends on lighting, texture and fixed reference points. Always check alignment before work.").font(.footnote) }
+            Section("SiteAR 1.0") { Text("Spatial work instructions · iOS 17+"); Text("Room recognition uses camera features from the saved scan. Lighting and texture affect accuracy. Check drawings against the physical room before work. Exported project files include room maps and images.").font(.footnote) }
         }.navigationTitle("Settings")
     }
 }

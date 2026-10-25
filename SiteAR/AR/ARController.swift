@@ -21,8 +21,6 @@ struct FrozenDrawingFrame {
     @Published private(set) var viewCapture=ViewCaptureRequest()
     var lockingView:Bool { viewCapture.isPending }
     @Published var mapped = false
-    @Published var markerRegistered = false
-    @Published var referencePoints: [Point3] = []
     @Published var draft: [Point3] = []
     @Published private(set) var lineDraft=FreehandDraft()
     @Published private(set) var draftImage: UIImage?
@@ -49,34 +47,22 @@ struct FrozenDrawingFrame {
     @Published var showSurfaceGuides = true { didSet { refreshSurfaceVisuals() } }
     private var detectedSurfaces: [UUID: SurfacePatch] = [:]
     private var surfaceEntities: [UUID: AnchorEntity] = [:]
-    private var surfaceBirths:[UUID:Date]=[:]
     private var surfaceStability:[UUID:SurfaceStability]=[:]
     private var placementStability:[UUID:SurfaceStability]=[:]
     private var placementTimes:[UUID:TimeInterval]=[:]
     private var renderedPatches:[UUID:SurfacePatch]=[:]
-    private var renderedReveals:[UUID:Float]=[:]
+    private var outlineFade:AnimationResource?
     private var memoryObserver:NSObjectProtocol?
     @Published private(set) var renderingReduced=false
     var cachedSurfaceCount:Int { detectedSurfaces.count }
     private var lastProgressUpdate: TimeInterval = 0
     private var coverage = ScanCoverage()
     var annotations: [Annotation] = []
-    var roomFromMarker: Pose?
-    var referenceImage: ARReferenceImage?
-    var markerData: Data?
-    var markerID: UUID?
-    var markerWidth: Double = 0.2
-    var markerHeight: Double = 0.2
     private var savedMap: ARWorldMap?
     private var normalSince: TimeInterval?
     private var startedAt = Date()
-    private var strategy: AlignmentMethod = .map
-    private var manualSamples: [Point3] = []
-    @Published var manualActive = false
     private var content: AnchorEntity?
-    private var verification: AnchorEntity?
     private var preview: AnchorEntity?
-    private var candidateMarker: Pose?
     private var stopped = false
     private var running = false
     private var restoredSentinel = false
@@ -113,35 +99,28 @@ struct FrozenDrawingFrame {
                 annotations = store.annotations.filter { $0.room_id == room.id }
                 try annotations.forEach { try $0.validate(room: room) }
                 await loadImageTextures(store:store)
-                if let marker = room.marker {
-                    do {
-                        let data = try await store.downloadAsset(path: marker.image_path)
-                        try await installMarker(data: data, id: marker.id, width: marker.width)
-                        roomFromMarker = marker.room_from_marker
-                    } catch { self.error = "Marker unavailable: \(error.localizedDescription). Map and manual recovery are still available." }
-                }
                 if let path = room.map_path {
                     do {
                         let data = try await store.downloadAsset(path: path)
                         guard let map = try NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data),
                               map.anchors.contains(where: { $0.name == sentinelName }) else { throw AppError.message("Map is corrupt or belongs to another coordinate system.") }
                         savedMap = map
-                    } catch { self.error = "Map unavailable: \(error.localizedDescription). Try the fixed marker or manual recovery." }
+                    } catch { self.error = "Map unavailable: \(error.localizedDescription). Ask the manager to restore the saved room map; tasks remain available." }
                 }
             }
             guard !stopped else { return }; ready = true
             if mode == .mapping { startMapping() }
             else if savedMap != nil { startMap() }
-            else { startMarker() }
+            else { localization.fail();guidance="No room map is available. Open the task list or ask the manager to rescan this room." }
         } catch { updateTracking(.unavailable);self.error = error.localizedDescription; guidance = "AR unavailable · use the task list" }
     }
+    var mapAvailable:Bool { savedMap != nil }
     private var sentinelName: String { "SiteAR.room.\(room.coordinate_id.uuidString)" }
     private func configuration(map: ARWorldMap? = nil) -> ARWorldTrackingConfiguration {
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal, .vertical]
         config.isAutoFocusEnabled=true
         config.initialWorldMap = map
-        if let referenceImage { config.detectionImages = [referenceImage]; config.maximumNumberOfTrackedImages = 1 }
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) { config.frameSemantics.insert(.sceneDepth) }
         return config
     }
@@ -149,65 +128,30 @@ struct FrozenDrawingFrame {
         cancelViewCapture();frozenFrame = nil
         clearVisuals(); localization.searching(); normalSince = nil; restoredSentinel = false
         clearSurfaces(); scan = ScanProgress(); coverage = ScanCoverage(); lastProgressUpdate = 0;renderingReduced=false
-        candidateMarker = nil; trackingNormal = false; trackingIssue = .initializing; targetReady=false; mapped = false; manualActive = false; manualSamples = []
+        trackingNormal = false; trackingIssue = .initializing; targetReady=false; mapped = false
         startedAt = Date(); running = true; interrupted = false
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
     }
     func startMapping() {
         guard ready else { return }
-        strategy = .map; reset(configuration()); markerRegistered = false; roomFromMarker = nil; referencePoints = []
+        reset(configuration())
         view.session.add(anchor: ARAnchor(name: sentinelName, transform: matrix_identity_float4x4))
         guidance = "Move slowly around the room. Look at textured walls, floor and furniture."
     }
     func startMap() {
-        guard ready, let savedMap else { error = "No usable map. Try marker or manual recovery."; return }
-        strategy = .map; reset(configuration(map: savedMap)); guidance = "Searching for the room. Look at captured details from overlapping viewpoints."
+        guard ready, let savedMap else { error = "No usable room map. Ask the manager to restore it; the task list remains available."; return }
+        reset(configuration(map: savedMap)); guidance = "Searching for the room. Look at captured details from overlapping viewpoints."
     }
     func continueSearching() {
-        guard running, strategy == .map, savedMap != nil, localization.state == .failed else { return }
+        guard running, savedMap != nil, localization.state == .failed else { return }
         localization.searching(); normalSince=nil; startedAt=Date()
         guidance="Search continues. Move to a scanned area and look at familiar details."
-    }
-    func startMarker() {
-        guard ready, referenceImage != nil, roomFromMarker != nil else { error = "This room has no fixed marker. Retry scanning the room from the original starting viewpoint."; return }
-        strategy = .marker; reset(configuration())
-        guidance = referenceImage == nil ? "No registered marker available. Use manual recovery." : "Scan the fixed marker, full image visible, in good light."
-    }
-    func startManual() {
-        guard ready, room.reference_points.count == 2 else { error = "This room has no saved reference points. Ask its manager to repair it."; return }
-        strategy = .manual; reset(configuration()); manualActive = true
-        guidance = "Manual alignment: tap reference point 1, then point 2. \(room.reference_notes)"
-    }
-    func installMarker(data: Data, id: UUID, width: Double) async throws {
-        guard let image = UIImage(data: data), let cg = image.cgImage, (0.05...2).contains(width) else { throw AppError.message("Choose a PNG/JPEG marker with width 5–200 cm.") }
-        let reference = ARReferenceImage(cg, orientation: .up, physicalWidth: CGFloat(width)); reference.name = id.uuidString
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            reference.validate { error in if let error { continuation.resume(throwing: error) } else { continuation.resume() } }
-        }
-        referenceImage = reference; markerID = id; markerWidth = width; markerHeight = width * Double(cg.height) / Double(cg.width)
-        markerData = data
-        if mode == .mapping && running {
-            markerRegistered = false; roomFromMarker = nil; candidateMarker = nil
-            view.session.run(configuration()) // Do not reset the room origin when enabling image detection.
-            guidance = "Point at the printed, fixed marker, then register it."
-        }
-    }
-    func registerMarker() {
-        guard mode == .mapping, trackingNormal,
-              view.session.currentFrame?.anchors.contains(where: { ($0 as? ARImageAnchor)?.isTracked == true && ($0 as? ARImageAnchor)?.referenceImage.name == markerID?.uuidString }) == true,
-              let candidateMarker else { error = "Marker not detected. Point at the entire fixed print in good light."; return }
-        roomFromMarker = candidateMarker; markerRegistered = true
-        guidance = "Optional marker registered. Continue scanning, then finish to draw."
     }
     func confirm() {
         localization.confirm(normalTracking: trackingNormal)
         if localization.state == .aligned { render(); renderDraft(); refreshSurfaceVisuals(); guidance = "Room recognized. Saved drawings are visible." }
     }
-    func reject() { localization.lose(); clearVisuals(); guidance = "Alignment rejected. Retry map, scan the fixed marker, or use manual recovery." }
-    func recheck() {
-        guard let pose = localization.roomToSession, let method = localization.method else { return }
-        localization.propose(pose, method: method); clearVisuals(); showVerification(pose)
-    }
+    func reject() { localization.lose(); clearVisuals(); guidance = "Alignment rejected. Retry room recognition; saved tasks remain available." }
     func stop() { cancelViewCapture();stopped = true; running = false; view.session.pause(); clearVisuals(); clearSurfaces() }
     func suspend() {
         updateTracking(.unavailable)
@@ -269,8 +213,7 @@ struct FrozenDrawingFrame {
         if !normal && (localization.state == .aligned || localization.state == .verifying) {
             localization.searching(); normalSince = nil; clearVisuals(); hideSurfaces(); startedAt = Date(); setGuidance(issue.instruction); return
         }
-        if strategy == .map,
-           localization.recoverMap(restoredRoomAnchor: restoredSentinel, normalTracking: normal,
+        if localization.recoverMap(restoredRoomAnchor: restoredSentinel, normalTracking: normal,
                                    stableSeconds: Double(frame.timestamp - (normalSince ?? frame.timestamp)),
                                    mapAvailable: frame.worldMappingStatus == .mapped || frame.worldMappingStatus == .extending) {
             render(); renderDraft(); refreshSurfaceVisuals()
@@ -294,26 +237,15 @@ struct FrozenDrawingFrame {
         for anchor in anchors {
             if let plane = anchor as? ARPlaneAnchor { updateSurface(plane) }
             if anchor.name == sentinelName { restoredSentinel = true }
-            guard let image = anchor as? ARImageAnchor, image.isTracked,
-                  image.referenceImage.name == markerID?.uuidString, trackingNormal,
-                  let pose = try? Pose(image.transform) else { continue }
-            if mode == .mapping { candidateMarker = pose }
-            else if strategy == .marker, localization.state == .relocalizing, let registered = roomFromMarker {
-                do {
-                    let alignment = try AlignmentMath.marker(sessionFromMarker: pose, roomFromMarker: registered)
-                    localization.propose(alignment, method: .marker); showVerification(alignment)
-                    guidance = "Marker found. Check that it has not moved and verification dots match the saved references. Confirm only if correct."
-                } catch { self.error = error.localizedDescription }
-            }
+
         }
     }
     func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
         for anchor in anchors {
             detectedSurfaces.removeValue(forKey: anchor.identifier)
-            surfaceBirths.removeValue(forKey:anchor.identifier)
             surfaceStability.removeValue(forKey:anchor.identifier)
             placementStability.removeValue(forKey:anchor.identifier);placementTimes.removeValue(forKey:anchor.identifier)
-            renderedPatches.removeValue(forKey:anchor.identifier);renderedReveals.removeValue(forKey:anchor.identifier)
+            renderedPatches.removeValue(forKey:anchor.identifier)
             if let entity = surfaceEntities.removeValue(forKey: anchor.identifier) { view.scene.removeAnchor(entity) }
         }
     }
@@ -475,17 +407,6 @@ struct FrozenDrawingFrame {
         }
         let position = Point3(matrix.columns.3.xyz)
         if mode == .mapping { return }
-        if manualActive {
-            manualSamples.append(position)
-            if manualSamples.count == 2 {
-                do {
-                    let pose = try AlignmentMath.manual(room: room.reference_points, session: manualSamples)
-                    localization.propose(pose, method: .manual); manualActive = false; showVerification(pose)
-                    guidance = "Manual alignment preview. Check BOTH reference dots, then explicitly confirm."
-                } catch { manualSamples = []; self.error = "Reference points do not agree. Retry in the saved order, with the same physical points at least 30 cm apart." }
-            } else { guidance = "Now capture reference point 2. \(room.reference_notes)" }
-            return
-        }
         guard mode == .editing, let alignment = localization.roomToSession else { error = "Confirm room alignment before placing instructions."; return }
         if drawingPlane == nil { lockPlane(point: position.vector, normal: frame.camera.transform.columns.2.xyz, camera: frame.camera) }
         let roomPoint = (simd_inverse(alignment.matrix) * SIMD4(position.vector,1)).xyz
@@ -497,7 +418,6 @@ struct FrozenDrawingFrame {
         if draft.isEmpty && frozenFrame == nil { drawingPlane=nil }; renderDraft()
     }
     func clearDraft() { lineDraft.clear(); draft = []; if frozenFrame == nil { drawingPlane = nil }; if let preview { view.scene.removeAnchor(preview) }; preview = nil }
-    func resetReferences() { referencePoints = []; renderMappingReferences() }
     func makeAnnotation(kind: AnnotationKind, title: String, detail: String, priority: Int, image: SpatialImage? = nil) throws -> Annotation {
         guard localization.roomToSession != nil, let first = draft.first else { throw AppError.message("Capture a point after aligning the room.") }
         var matrix = drawingPlane?.matrix ?? matrix_identity_float4x4
@@ -557,11 +477,6 @@ struct FrozenDrawingFrame {
         let mapPath = root + ".worldmap"
         try await store.uploadAsset(path: mapPath, data: data, type: "application/octet-stream")
         var updated = room; updated.map_path = mapPath
-        if markerRegistered, let markerID, let markerData, let roomFromMarker {
-            let imagePath = root + ".png"
-            try await store.uploadAsset(path: imagePath, data: markerData, type: "image/png")
-            updated.marker = Marker(id: markerID, image_path: imagePath, width: markerWidth, height: markerHeight, room_from_marker: roomFromMarker)
-        }
         updated.surfaces = detectedSurfaces.values.sorted { $0.id.uuidString < $1.id.uuidString }
         // Publish metadata only after both assets exist. Existing room maps are immutable.
         pendingPublication = updated
@@ -577,8 +492,8 @@ struct FrozenDrawingFrame {
         guidance = "Draw on detected surfaces. Drag for a line, or tap corners for an area."
     }
     private func clearVisuals() {
-        for anchor in [content, verification, preview].compactMap({ $0 }) { view.scene.removeAnchor(anchor) }
-        content = nil; verification = nil; preview = nil
+        for anchor in [content, preview].compactMap({ $0 }) { view.scene.removeAnchor(anchor) }
+        content = nil; preview = nil
     }
     private func dot(_ position: SIMD3<Float>, color: UIColor, radius: Float = 0.035) -> ModelEntity {
         let model = ModelEntity(mesh: .generateSphere(radius: radius), materials: [SimpleMaterial(color: color, isMetallic: false)])
@@ -588,20 +503,6 @@ struct FrozenDrawingFrame {
         let mesh = MeshResource.generateText(String(text.prefix(240)), extrusionDepth: 0.001, font: .systemFont(ofSize: 0.045), containerFrame: CGRect(x: 0,y: 0,width: 0.7,height: 0.6), alignment: .left, lineBreakMode: .byWordWrapping)
         let model = ModelEntity(mesh: mesh, materials: [SimpleMaterial(color: color, isMetallic: false)])
         model.position = point + SIMD3(0.05,0.04,0); return model
-    }
-    private func showVerification(_ pose: Pose) {
-        clearVisuals(); let anchor = AnchorEntity(world: pose.matrix)
-        for (i,p) in room.reference_points.enumerated() {
-            anchor.addChild(dot(p.vector, color: .systemYellow))
-            anchor.addChild(label("CHECK \(i+1)", at: p.vector, color: .systemYellow))
-        }
-        verification = anchor; view.scene.addAnchor(anchor)
-    }
-    private func renderMappingReferences() {
-        if let verification { view.scene.removeAnchor(verification) }
-        let anchor = AnchorEntity(world: matrix_identity_float4x4)
-        for (i,p) in referencePoints.enumerated() { anchor.addChild(dot(p.vector, color: .systemYellow)); anchor.addChild(label("Reference \(i+1)", at: p.vector, color: .systemYellow)) }
-        verification = anchor; view.scene.addAnchor(anchor)
     }
     private func renderDraft(throttled: Bool=false) {
         let now=CACurrentMediaTime()
@@ -631,7 +532,6 @@ struct FrozenDrawingFrame {
     }
     func render() {
         if let content { view.scene.removeAnchor(content) }; content = nil
-        if let verification { view.scene.removeAnchor(verification) }; verification = nil
         guard let alignment = localization.roomToSession, trackingNormal else { return }
         let anchor = AnchorEntity(world: alignment.matrix)
         for item in annotations {
@@ -728,25 +628,24 @@ extension ARController {
         let ids=Set(visible.map(\.id))
         for id in Array(surfaceEntities.keys) where !ids.contains(id) {
             if let root=surfaceEntities.removeValue(forKey:id) { view.scene.removeAnchor(root) }
-            surfaceBirths.removeValue(forKey:id);renderedPatches.removeValue(forKey:id);renderedReveals.removeValue(forKey:id)
+            renderedPatches.removeValue(forKey:id)
         }
         for patch in visible {
             let root:AnchorEntity
             if let existing=surfaceEntities[patch.id] { root=existing }
             else {
                 root=AnchorEntity(world:SIMD3<Float>.zero);surfaceEntities[patch.id]=root
-                surfaceBirths[patch.id]=Date();view.scene.addAnchor(root)
+                view.scene.addAnchor(root)
             }
             root.isEnabled=true;root.transform=Transform(matrix:patch.pose.matrix)
-            let elapsed=Date().timeIntervalSince(surfaceBirths[patch.id] ?? .distantPast)
-            let reveal:Float=(renderingReduced || UIAccessibility.isReduceMotionEnabled) ? 1 : min(1,max(0.02,Float(elapsed/0.55)))
-            if renderedPatches[patch.id]?.vertices == patch.vertices,renderedReveals[patch.id] == 1,reveal == 1 { continue }
+            if renderedPatches[patch.id]?.vertices == patch.vertices { continue }
+            let firstGeometry=renderedPatches[patch.id] == nil
             let points=ScanRenderingBudget.displayBoundary(patch.vertices,maximum:renderingReduced ? 12 : 24)
                 .map { Point3($0.vector+SIMD3<Float>(0,0.003,0)) }
             var allRendered=true
             for halo in (renderingReduced ? [false] : [true,false]) {
                 let name=halo ? "halo" : "edge"
-                guard let geometry=ScanRenderingBudget.outline(points,thickness:halo ? 0.013 : 0.0035,reveal:reveal) else {
+                guard let geometry=ScanRenderingBudget.outline(points,thickness:halo ? 0.013 : 0.0035) else {
                     root.findEntity(named:name)?.removeFromParent();allRendered=false;continue
                 }
                 var descriptor=MeshDescriptor(name:"Batched scan outline")
@@ -761,8 +660,21 @@ extension ARController {
                     model.name=name;root.addChild(model)
                 }
             }
-            if allRendered { renderedPatches[patch.id]=patch;renderedReveals[patch.id]=reveal }
-            else { renderedPatches.removeValue(forKey:patch.id);renderedReveals.removeValue(forKey:patch.id) }
+            if allRendered {
+                renderedPatches[patch.id]=patch
+                if firstGeometry { revealOutline(root) }
+            } else { renderedPatches.removeValue(forKey:patch.id) }
+        }
+    }
+    /// One engine-managed animation per outline, without per-frame mesh regeneration.
+    private func revealOutline(_ root:Entity) {
+        guard !renderingReduced,!UIAccessibility.isReduceMotionEnabled else { return }
+        if #available(iOS 18.0,*) {
+            root.components.set(OpacityComponent(opacity:1))
+            if outlineFade == nil {
+                outlineFade=try? AnimationResource.generate(with:FromToByAnimation<Float>(from:0.15,to:1,duration:0.45,timing:.easeOut,bindTarget:.opacity,fillMode:.forwards))
+            }
+            if let outlineFade { root.playAnimation(outlineFade) }
         }
     }
     private func outlineMaterial(halo:Bool,selected:Bool) -> UnlitMaterial {
@@ -797,7 +709,7 @@ extension ARController {
     private func hideSurfaces() { for entity in surfaceEntities.values { entity.isEnabled = false } }
     private func releaseSurfaceRendering() {
         for entity in surfaceEntities.values { view.scene.removeAnchor(entity) }
-        surfaceEntities=[:];surfaceBirths=[:];renderedPatches=[:];renderedReveals=[:]
+        surfaceEntities=[:];renderedPatches=[:]
     }
     private func clearSurfaces() {
         releaseSurfaceRendering();detectedSurfaces=[:];surfaceStability=[:];placementStability=[:];placementTimes=[:]

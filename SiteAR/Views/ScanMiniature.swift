@@ -13,6 +13,10 @@ struct ScanMiniature: View {
     @State private var yawStart=Date.distantPast
     @State private var animating=false
     @State private var revision=0
+    @State private var model:[SurfacePatch]=[]
+    @State private var modelInitialized=false
+    @State private var modelSource:[SurfacePatch]=[]
+    @State private var sourceBudget=0
     struct Entry {
         var patch:SurfacePatch
         var from:[SIMD3<Float>]
@@ -32,12 +36,12 @@ struct ScanMiniature: View {
         var alpha:Double
     }
     var body: some View {
-        TimelineView(.animation(minimumInterval:reducedDetail ? 0.2 : 0.1,paused:reduceMotion || !animating)) { tick in
+        TimelineView(.animation(minimumInterval:ScanVisualization.animationFrameInterval(for:modelInitialized ? model.count : surfaces.count),paused:reduceMotion || reducedDetail || !animating)) { tick in
             Canvas { context,size in
                 let now=tick.date,reduced=reduceMotion || reducedDetail
                 let t=reduced ? Float(1) : min(1,max(0,Float(now.timeIntervalSince(yawStart))/0.35))
                 let rotation=yawFrom+(shownYaw-yawFrom)*t+0.7,c=cos(rotation),s=sin(rotation)
-                let visible=surfaces.prefix(reducedDetail ? 12 : 24).map { patch in
+                let visible=(modelInitialized ? model : RoomSurfaceModel.consolidate(surfaces,maximum:reducedDetail ? 12 : 24)).map { patch in
                     entries[patch.id] ?? entry(patch,at:.distantPast)
                 }
                 var faces:[Face]=[]
@@ -92,7 +96,12 @@ struct ScanMiniature: View {
         return Entry(patch:patch,from:points,target:points,start:date,birth:date)
     }
     private func update(_ surfaces:[SurfacePatch],animate:Bool=true) {
-        let now=Date(),selected=Array(surfaces.prefix(reducedDetail ? 12 : 24)),ids=Set(selected.map(\.id))
+        let maximum=reducedDetail ? 12 : 24
+        let source=surfaces.prefix(24).sorted { $0.id.uuidString<$1.id.uuidString }
+        guard !modelInitialized || modelSource != source || sourceBudget != maximum else { return }
+        modelSource=source;sourceBudget=maximum
+        let now=Date(),selected=RoomSurfaceModel.consolidate(source,maximum:maximum),ids=Set(selected.map(\.id))
+        if model != selected { model=selected };modelInitialized=true
         entries=entries.filter { ids.contains($0.key) }
         var changed=false
         for patch in selected {

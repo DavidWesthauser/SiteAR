@@ -26,19 +26,17 @@ struct ARScreen: View {
     @State private var title = ""; @State private var detail = ""
     @State private var replacing: Annotation?
     @State private var priority = 1
-    @State private var width: Double = 0.2
     @State private var distance: Double = 1
     @State private var manualDistance = false
-    @State private var importing = false; @State private var printing = false
+    @State private var importing = false
     @State private var taskList = false; @State private var closing = false
     @State private var saving = false
     @State private var tools = true
     @State private var pickingPhoto=false
     @State private var photoSelection: PhotosPickerItem?
-    @State private var importingDrawingImage=false
     @State private var imageLoading=false
     @State private var scanMore = false
-    @State private var markerExpanded=false
+    @State private var showingScanOptions=false
     @State private var showingWorkDetails=false
     @State private var showingPlacement=false
     @State private var restartingScan=false
@@ -81,14 +79,13 @@ struct ARScreen: View {
                 GeometryReader { proxy in
                     ZStack {
                         Color.clear
-                        if mode == .editing || ar.manualActive { Image(systemName:"plus").font(.system(size:20,weight:.semibold)).foregroundStyle(.white).shadow(radius:2).accessibilityHidden(true) }
+                        if mode == .editing { Image(systemName:"plus").font(.system(size:20,weight:.semibold)).foregroundStyle(.white).shadow(radius:2).accessibilityHidden(true) }
                     }.preference(key:CameraAimPreference.self,value:CGPoint(x:proxy.frame(in:.global).midX,y:proxy.frame(in:.global).midY))
                 }.frame(minHeight:44).allowsHitTesting(false)
                 if mode == .mapping || scanMore { ScanOverview(progress: ar.scan) }
                 if ar.localization.state == .verifying {
                     VStack {
-                        Text("Optional recovery: check that the marker is fixed and the saved reference positions agree.").font(.subheadline)
-                        if !room.reference_notes.isEmpty { Text(room.reference_notes).font(.caption) }
+                        Text("Check this alignment against recognizable room features before confirming it.").font(.subheadline)
                         HStack { Button("Incorrect") { ar.reject() }; Spacer(); Button("Confirm recovery") { ar.confirm() }.buttonStyle(.borderedProminent).disabled(!ar.trackingNormal) }
                     }.padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
                 }
@@ -96,9 +93,6 @@ struct ARScreen: View {
                     VStack(spacing:0) {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
-                            if mode == .mapping {
-                                DisclosureGroup("Reference marker (optional)",isExpanded:$markerExpanded) { markerTools }.font(.caption)
-                            } else {
                                 if ar.localization.state == .aligned {
                                     if mode == .editing {
                                         if scanMore {
@@ -108,22 +102,14 @@ struct ARScreen: View {
                                         Button(scanMore ? "Hide scan overview" : "Scan more surfaces") { ar.resumeCamera(); scanMore.toggle(); ar.showSurfaceGuides=scanMore }.font(.caption)
                                     } else { Toggle("Show surface outlines", isOn: $ar.showSurfaceGuides).font(.caption) }
                                 } else if ar.localization.state != .verifying {
-                                    if ar.localization.state == .failed {
+                                    if ar.localization.state == .failed && ar.mapAvailable {
                                         Button("Keep searching") { ar.continueSearching() }.buttonStyle(.borderedProminent)
                                     }
-                                    Button("Scan room again") { ar.startMap() }.buttonStyle(.borderedProminent).disabled(!ar.ready)
+                                    Button("Scan room again") { ar.startMap() }.buttonStyle(.borderedProminent).disabled(!ar.ready || !ar.mapAvailable)
                                 }
-                                if room.marker != nil || room.reference_points.count == 2 {
-                                    DisclosureGroup("Recovery options") {
-                                        if room.marker != nil { Button("Scan fixed marker") { ar.startMarker() } }
-                                        if room.reference_points.count == 2 { Button("Align saved reference points") { ar.startManual() } }
-                                    }
-                                }
-                                if ar.manualActive { captureControls }
                                 if ar.localization.state == .aligned { Button("Recognize room again") { ar.startMap() }.font(.caption) }
-                            }
                         }.padding()
-                    }.scrollIndicators(.visible).frame(maxHeight: mode == .mapping ? (markerExpanded ? 200 : 56) : (mode == .walkthrough ? 100 : 200))
+                    }.scrollIndicators(.visible).frame(maxHeight: mode == .mapping ? (showingScanOptions ? 200 : 56) : (mode == .walkthrough ? 100 : 200))
                     if mode == .mapping {
                         Divider()
                         Button { saveRoom() } label: { Label("Finish scan",systemImage:"pencil.tip").font(.headline).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth:.infinity,minHeight:36) }
@@ -158,24 +144,15 @@ struct ARScreen: View {
         .confirmationDialog(mode == .mapping ? "Leave this unsaved scan?" : (ar.draft.isEmpty ? "Close AR? Saved drawings will be kept." : "Discard unsaved drawing and close AR?"), isPresented: $closing, titleVisibility: .visible) {
             Button("Close AR", role: ar.draft.isEmpty && mode != .mapping ? nil : .destructive) { dismiss() }
         }
-        .sheet(isPresented: $printing) { if let data = ar.markerData { PrintSheet(data: data) } }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.png,.jpeg]) { result in
+        .fileImporter(isPresented:$importing,allowedContentTypes:[.png,.jpeg]) { result in
             do {
-                let url = try result.get(); guard url.startAccessingSecurityScopedResource() else { throw AppError.message("Cannot read selected file.") }; defer { url.stopAccessingSecurityScopedResource() }
-                let data = try Data(contentsOf: url)
-                if importingDrawingImage {
-                    imageLoading=true
-                    Task { defer { imageLoading=false }; do { try await ar.setImage(data) } catch { ar.error=error.localizedDescription } }
-                    return
-                }
-                guard data.count < 20_000_000, let image = UIImage(data: data) else { throw AppError.message("Select an image under 20 MB.") }
-                let normalized = UIGraphicsImageRenderer(size: image.size).image { _ in image.draw(in: CGRect(origin: .zero,size: image.size)) }
-                guard let png = normalized.pngData() else { return }
-                Task { do {
-                    if importingDrawingImage { imageLoading=true; defer { imageLoading=false }; try await ar.setImage(png) }
-                    else { try await ar.installMarker(data:png,id:UUID(),width:width) }
-                } catch { ar.error=error.localizedDescription } }
-            } catch { ar.error = error.localizedDescription }
+                let url=try result.get()
+                guard url.startAccessingSecurityScopedResource() else { throw AppError.message("Cannot read selected file.") }
+                defer { url.stopAccessingSecurityScopedResource() }
+                let data=try Data(contentsOf:url,options:.mappedIfSafe)
+                imageLoading=true
+                Task { defer { imageLoading=false };do { try await ar.setImage(data) } catch { ar.error=error.localizedDescription } }
+            } catch { ar.error=error.localizedDescription }
         }
         .sheet(isPresented: $taskList, onDismiss: { Task { await reload() } }) {
             NavigationStack {
@@ -229,7 +206,7 @@ struct ARScreen: View {
                 }.frame(minHeight:44).allowsHitTesting(false)
                 ScanOverview(progress:ar.scan)
                 HStack {
-                    Button { markerExpanded=true } label: {
+                    Button { showingScanOptions=true } label: {
                         Image(systemName:"slider.horizontal.3").font(.system(size:18,weight:.medium)).frame(width:44,height:44)
                             .background(.black.opacity(0.16),in:Circle())
                     }.buttonStyle(.plain).accessibilityLabel("Scan options and progress")
@@ -237,7 +214,7 @@ struct ARScreen: View {
                 }
             }.padding(.horizontal,20).padding(.bottom,8)
         }.foregroundStyle(.white).environment(\.colorScheme,.dark)
-        .sheet(isPresented:$markerExpanded) {
+        .sheet(isPresented:$showingScanOptions) {
             NavigationStack {
                 Form {
                     Section("Scan progress") {
@@ -252,31 +229,14 @@ struct ARScreen: View {
                         Text(ar.trackingIssue == .none ? "Tracking is stable. Continue scanning from overlapping viewpoints." : ar.trackingIssue.instruction)
                         Button("Restart scan",role:.destructive) { restartingScan=true }
                     }
-                    Section("Reference marker (optional)") { markerTools }
                 }
                 .confirmationDialog("Restart and discard this unsaved scan?",isPresented:$restartingScan,titleVisibility:.visible) {
-                    Button("Restart scan",role:.destructive) { markerExpanded=false;ar.startMapping() }
+                    Button("Restart scan",role:.destructive) { showingScanOptions=false;ar.startMapping() }
                 }
                     .navigationTitle("Scan options").navigationBarTitleDisplayMode(.inline)
-                    .toolbar { ToolbarItem(placement:.confirmationAction) { Button("Done") { markerExpanded=false } } }
+                    .toolbar { ToolbarItem(placement:.confirmationAction) { Button("Done") { showingScanOptions=false } } }
             }
         }
-    }
-    private var markerTools: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Only needed if scanning the room later is unreliable. Use a unique, permanently fixed print with its measured width.").font(.caption)
-            HStack {
-                Button("Generate print") { let id = UUID(); let data = MarkerPrint.make(id: id); Task { do { try await ar.installMarker(data: data, id: id, width: width); printing = true } catch { ar.error = error.localizedDescription } } }
-                Button("Import image") { importingDrawingImage=false; importing = true }
-                if ar.markerData != nil { Button("Print / Share") { printing = true } }
-            }
-            HStack { Text("Print width (m)"); TextField("0.20", value: $width, format: .number).keyboardType(.decimalPad).textFieldStyle(.roundedBorder) }
-            Button("Apply measured width") {
-                guard let data = ar.markerData, let id = ar.markerID else { return }
-                Task { do { try await ar.installMarker(data: data, id: id, width: width) } catch { ar.error = error.localizedDescription } }
-            }
-            Button(ar.markerRegistered ? "Marker registered ✓" : "Register detected marker") { ar.registerMarker() }.disabled(!ar.ready)
-        }.padding(.top, 8)
     }
     private var captureControls: some View {
         VStack(alignment: .leading) {
@@ -307,7 +267,7 @@ struct ARScreen: View {
                     }
                 }
                 Text("Tap a detected surface to place the image.").font(.caption).fixedSize(horizontal:false,vertical:true)
-                Button("Choose from Files",systemImage:"folder") { importingDrawingImage=true; importing=true }.font(.subheadline)
+                Button("Choose from Files",systemImage:"folder") { importing=true }.font(.subheadline)
             } else {
                 Text(ar.tool == .line ? "Drag to draw. Lift your finger to end the stroke." : "Tap the corners of an area.").font(.caption)
             }
