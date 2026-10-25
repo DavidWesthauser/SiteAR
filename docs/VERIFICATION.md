@@ -1,5 +1,11 @@
 # Verification record — latest update 2026-10-25
 
+## Current scan presentation refinement
+
+- Simplified the live overlay toward the supplied promotional reference: plain controls, a short coaching capsule, lighter miniature faces/contact shadow and one compact live-status label. Detailed progress moved to Options; the visual budgets and real geometry contract are unchanged.
+- Deterministic suite: **46 passed**, zero failures. Initial renderer/layout/navigation run: **7 passed** (six AR fixtures including the 600-surface stress case plus one scan UI workflow). Final layout/startup-error/navigation checks were repeated after finishing control states, and the scan UI test passed with explicit assertions that Directions/Positions remain accessible in Options. Compact and large-text scan screenshots were visually reviewed.
+- These changes are **not installed on the phone**. Camera appearance, readability over real scenes and physical performance still require hardware acceptance; this is not a claim of RoomPlan recognition parity.
+
 ## Current long-scan fix and project polish
 
 - User reported lag followed by a crash during extended room scanning on iPhone 12 mini. Code review identified unbounded per-edge render entities, recursive edge lookups, repeated visibility sweeps and continuous miniature geometry/sort allocations. **No crash/Jetsam report was retrieved:** devicectl reported the phone unavailable, so the actual termination cause remains unconfirmed.

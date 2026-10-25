@@ -21,7 +21,7 @@ ARPlaneAnchor add/update/remove events drive thin boundary outlines in RealityKi
 
 Initial placement and Lock view use existingPlaneGeometry only, bounded to 0.15–5 m; no silent estimatedPlane fallback is allowed. The targeted plane is highlighted in mint before a drawing is locked, with orientation/distance in the editor. Explicit measured-distance placement follows the actual crosshair ray instead of the camera forward vector. Boundary simplification tolerance is 5 mm, retaining smaller detected corners. These changes do not remove camera-only plane estimation error or AR tracking drift.
 
-The scan overlay prioritizes the camera with Cancel/Finish, a floating boundary overview, detected-surface counts and map-readiness stages. It never reports a fabricated coverage percentage.
+The scan overlay prioritizes the camera with plain Cancel/Finish, a short coaching capsule and a floating miniature. Surface counts, direction/position evidence and map readiness live in the Options sheet. It never reports a fabricated coverage percentage.
 
 Plane alignment distinguishes vertical/horizontal candidates, not semantic walls/furniture. The overview projects real boundary geometry; it is not a generated miniature building. The app does not require RoomPlan or LiDAR. Scene depth is optional when supported. No Gaussian Splatting, furniture classification or 3D export is implemented.
 

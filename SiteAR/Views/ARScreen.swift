@@ -84,7 +84,7 @@ struct ARScreen: View {
                         if mode == .editing || ar.manualActive { Image(systemName:"plus").font(.system(size:20,weight:.semibold)).foregroundStyle(.white).shadow(radius:2).accessibilityHidden(true) }
                     }.preference(key:CameraAimPreference.self,value:CGPoint(x:proxy.frame(in:.global).midX,y:proxy.frame(in:.global).midY))
                 }.frame(minHeight:44).allowsHitTesting(false)
-                if mode == .mapping || scanMore { ScanOverview(progress: ar.scan,showCoverage:mode == .mapping) }
+                if mode == .mapping || scanMore { ScanOverview(progress: ar.scan) }
                 if ar.localization.state == .verifying {
                     VStack {
                         Text("Optional recovery: check that the marker is fixed and the saved reference positions agree.").font(.subheadline)
@@ -193,28 +193,60 @@ struct ARScreen: View {
             } : nil) }.environmentObject(store)
         }
     }
+    private var scanCoachTitle:String {
+        if ar.trackingIssue == .unavailable { return "AR unavailable" }
+        if !ar.ready { return "Starting camera" }
+        if ar.ready,ar.trackingIssue != .none { return ar.trackingIssue.title }
+        if !ar.scan.normalTracking { return "Move slowly to begin" }
+        if ar.scan.coverage.positions.count<3 { return "Walk around the room" }
+        if ar.scan.coverage.headings.count<4 { return "Look in every direction" }
+        return "Revisit a familiar corner"
+    }
     private var scanOverlay: some View {
-        VStack(spacing:12) {
-            HStack {
-                Button("Cancel") { closing=true }.frame(minWidth:44,minHeight:44).accessibilityLabel("Close")
+        ZStack {
+            VStack(spacing:0) {
+                LinearGradient(colors:[.black.opacity(0.35),.clear],startPoint:.top,endPoint:.bottom).frame(height:180)
                 Spacer()
-                Button { saveRoom() } label: {
-                    Text("Finish").fontWeight(.semibold).frame(minWidth:64,minHeight:44)
-                }.disabled(!ar.scan.canFinish || saving).accessibilityIdentifier("scan.finish")
-            }.padding(.horizontal,8).background(.black.opacity(0.3),in:RoundedRectangle(cornerRadius:16))
-            GeometryReader { proxy in
-                Color.clear.preference(key:CameraAimPreference.self,value:CGPoint(x:proxy.frame(in:.global).midX,y:proxy.frame(in:.global).midY))
-            }.frame(minHeight:44).allowsHitTesting(false)
-            ScanOverview(progress:ar.scan)
-            Text(ar.scan.canFinish ? "Check the outlines against physical edges." : ar.guidance)
-                .font(typeSize.isAccessibilitySize ? .caption.weight(.medium) : .subheadline.weight(.medium)).multilineTextAlignment(.center).lineLimit(3).fixedSize(horizontal:false,vertical:true)
-                .padding(12).frame(maxWidth:.infinity).background(.black.opacity(0.55),in:RoundedRectangle(cornerRadius:14))
-            Button("Options",systemImage:"slider.horizontal.3") { markerExpanded=true }
-                .font(.subheadline).frame(minHeight:44).padding(.horizontal,16).background(.black.opacity(0.4),in:Capsule())
-        }.foregroundStyle(.white).padding(.horizontal,16).padding(.bottom,8)
+                LinearGradient(colors:[.clear,.black.opacity(0.18)],startPoint:.top,endPoint:.bottom).frame(height:180)
+            }.ignoresSafeArea().allowsHitTesting(false)
+            VStack(spacing:12) {
+                HStack {
+                    Button("Cancel") { closing=true }.frame(minWidth:44,minHeight:44).accessibilityLabel("Close")
+                    Spacer()
+                    Button { saveRoom() } label: {
+                        Text("Finish").fontWeight(.semibold).frame(minWidth:64,minHeight:44)
+                    }.disabled(!ar.scan.canFinish || saving).opacity(ar.scan.canFinish && !saving ? 1 : 0.35).accessibilityIdentifier("scan.finish")
+                }.font(.body).buttonStyle(.plain).shadow(color:.black.opacity(0.5),radius:3,y:1)
+                if !ar.scan.canFinish || (ar.ready && ar.trackingIssue != .none) {
+                    Label(scanCoachTitle,systemImage:ar.trackingIssue == .excessiveMotion ? "hand.raised" : "viewfinder")
+                        .font(.subheadline.weight(.medium)).multilineTextAlignment(.center).lineLimit(2).fixedSize(horizontal:false,vertical:true)
+                        .padding(.horizontal,16).padding(.vertical,10)
+                        .background(.ultraThinMaterial,in:Capsule()).frame(maxWidth:320)
+                        .accessibilityLabel(ar.guidance)
+                }
+                GeometryReader { proxy in
+                    Color.clear.preference(key:CameraAimPreference.self,value:CGPoint(x:proxy.frame(in:.global).midX,y:proxy.frame(in:.global).midY))
+                }.frame(minHeight:44).allowsHitTesting(false)
+                ScanOverview(progress:ar.scan)
+                HStack {
+                    Button { markerExpanded=true } label: {
+                        Image(systemName:"slider.horizontal.3").font(.system(size:18,weight:.medium)).frame(width:44,height:44)
+                            .background(.black.opacity(0.16),in:Circle())
+                    }.buttonStyle(.plain).accessibilityLabel("Scan options and progress")
+                    Spacer()
+                }
+            }.padding(.horizontal,20).padding(.bottom,8)
+        }.foregroundStyle(.white).environment(\.colorScheme,.dark)
         .sheet(isPresented:$markerExpanded) {
             NavigationStack {
                 Form {
+                    Section("Scan progress") {
+                        LabeledContent("Room map",value:ar.scan.mapReady ? "Ready" : "Building")
+                        LabeledContent("Directions",value:"\(ar.scan.coverage.headings.count) of 4")
+                        LabeledContent("Positions",value:"\(min(ar.scan.coverage.positions.count,3)) of 3")
+                        LabeledContent("Surface outlines",value:"\(ar.scan.surfaces.count) nearby")
+                        Text("The miniature shows detected patches. Check them against physical edges; it is not proof of complete room coverage.").font(.footnote).foregroundStyle(.secondary)
+                    }
                     Section("Tracking") {
                         if ar.renderingReduced { Text("Scan detail was reduced to limit rendering work. Finish this room before scanning another. Your map and drawings are retained.").font(.footnote) }
                         Text(ar.trackingIssue == .none ? "Tracking is stable. Continue scanning from overlapping viewpoints." : ar.trackingIssue.instruction)

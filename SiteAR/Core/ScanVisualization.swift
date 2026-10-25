@@ -13,10 +13,10 @@ public enum ScanVisualization {
         guard p.count>=3 else { return [] }
         let offset=patch.pose.matrix.columns.1.xyz*thickness/2
         let front=p.map { $0+offset }, back=p.map { $0-offset }
-        var faces=[ScanModelFace(vertices:front,shade:patch.vertical ? 0.94 : 0.98),
-                   ScanModelFace(vertices:Array(back.reversed()),shade:0.72)]
+        var faces=[ScanModelFace(vertices:front,shade:patch.vertical ? 0.97 : 1),
+                   ScanModelFace(vertices:Array(back.reversed()),shade:0.86)]
         for i in p.indices { let j=(i+1)%p.count
-            faces.append(ScanModelFace(vertices:[front[i],front[j],back[j],back[i]],shade:0.65))
+            faces.append(ScanModelFace(vertices:[front[i],front[j],back[j],back[i]],shade:0.76))
         }
         return faces
     }

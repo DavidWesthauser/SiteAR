@@ -71,3 +71,7 @@ Do not mark physical acceptance complete until same-phone persistence and two-ph
 3. Simulate a memory warning in the simulator; on hardware observe genuine pressure/thermal changes. Reduced detail must release visual resources while preserving tasks/map references. Check that a real targeted surface remains placeable even when omitted from the displayed overview.
 4. Finish/save, close, reopen and recover the same room. Verify each instruction's position and task status. ARKit map memory is independent of the display budget; do not treat a building-sized scan as one room.
 5. If the app exits, retrieve the SiteAR crash .ips or JetsamEvent report from Xcode/device diagnostics (or iPhone Settings → Privacy & Security → Analytics & Improvements → Analytics Data). Correlate timestamp/process and termination reason. A memory-pressure report, watchdog timeout and exception require different conclusions. Current development cannot label this crash fixed without that evidence and a successful hardware rerun.
+
+## Minimal scan overlay check
+
+Check Cancel/Finish over bright and dark real camera scenes, including disabled Finish. The coaching capsule should stay brief, the miniature should float near the bottom and the lower-left control should open Scan progress, tracking guidance and recovery options. Verify counts remain accessible in that sheet, the reduced-detail leaf has a VoiceOver label, and camera-denied/unsupported states do not incorrectly ask the user to keep moving. Repeat with large text; keep the renderer budgets unchanged.

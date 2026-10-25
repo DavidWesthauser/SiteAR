@@ -36,6 +36,12 @@ final class WorkflowTests: XCTestCase {
         XCTAssertFalse(app.buttons["scan.finish"].isEnabled) // Simulator cannot collect a real map.
         XCTAssertFalse(app.buttons["Register detected marker"].exists)
         XCTAssertFalse(app.buttons["Capture at crosshair"].exists)
+        app.buttons["Scan options and progress"].tap()
+        XCTAssertTrue(app.staticTexts["Directions"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["Positions"].exists)
+        app.buttons["Done"].tap()
+        let closeReady=XCTNSPredicateExpectation(predicate:NSPredicate(format:"isHittable == true"),object:app.buttons["Close"])
+        XCTAssertEqual(XCTWaiter.wait(for:[closeReady],timeout:5),.completed)
         app.buttons["Close"].tap(); app.buttons["Close AR"].tap()
         let back = app.navigationBars.buttons[String(title)]
         let visible = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: back)

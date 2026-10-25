@@ -133,7 +133,7 @@ struct FrozenDrawingFrame {
             if mode == .mapping { startMapping() }
             else if savedMap != nil { startMap() }
             else { startMarker() }
-        } catch { self.error = error.localizedDescription; guidance = "AR unavailable · use the task list" }
+        } catch { updateTracking(.unavailable);self.error = error.localizedDescription; guidance = "AR unavailable · use the task list" }
     }
     private var sentinelName: String { "SiteAR.room.\(room.coordinate_id.uuidString)" }
     private func configuration(map: ARWorldMap? = nil) -> ARWorldTrackingConfiguration {
