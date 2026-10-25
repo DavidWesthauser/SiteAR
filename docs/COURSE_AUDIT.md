@@ -31,7 +31,7 @@ The quiz-specific categories/question types are an alternative example, not requ
 
 ## Practical next steps
 
-1. Finish the long-scan performance fix and record physical behavior/crash diagnostics.
-2. Connect a development Supabase project, run migrations/policies and prove manager-A/worker-B persistence and access denial.
+1. Verify local `.sitear` export/import on two phones and record room recovery, physical error and long-scan/crash diagnostics. This transfer is an independent editable copy, not cloud persistence or access protection.
+2. Backend connection is deliberately deferred for the current user-requested file workflow. Before course submission, connect a development Supabase project, run migrations/policies and prove manager-A/worker-B persistence and access denial; use BACKEND_SETUP.md.
 3. Record the actual two-person MUST-HAVEs and lecturer/iOS agreement.
 4. Each student reviews, changes, tests and commits understandable work; complete the individual AI reflection and handover preparation honestly.

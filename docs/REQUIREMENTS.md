@@ -1,42 +1,53 @@
 # Verifiable scope and effort
 
-The current flow is scan → draw → save → recognize the room → restore drawings. Manual dots and printed markers are no longer mandatory. Live plane outlines/counts/overview report detected surfaces, not total room coverage. Implementation is present for the following requirements. Acceptance requires the listed evidence; delivery of code alone does not close hardware or backend acceptance.
+The current flow is scan → draw → save → export/import a local copy → recognize the room → restore drawings. There are no fixed markers or selected reference dots. Marker capture/detection and manual-reference recovery are removed; legacy JSON fields still decode. Plane outlines and the miniature show observed surfaces rather than whole-room coverage.
 
-| MUST HAVE | Observable acceptance | Verification |
+**No backend is connected for the current workflow.** Local Debug installs and `.sitear` transfers are the active scope. Supabase implementation remains in the repository for future activation; file sharing does not satisfy the course's mandatory cloud/account requirements. Implementation alone does not close physical or live-backend acceptance. See [verification](VERIFICATION.md).
+
+| Requirement | Observable acceptance | Current evidence / remaining work |
 |---|---|---|
-| Native iPhone app | Signed installation opens SwiftUI authentication on iOS 17+ | Device install required; simulator build compiled |
-| Accounts | Register, confirm email, sign in, relaunch, refresh token, sign out | Mock network tests; live Auth pending |
-| Project/room CRUD | Create, rename, refresh, delete; room names remain associated with project | Policy/UI suites supplied; backend execution pending |
-| Camera-only mapping | Normal world tracking and mapped status without scene depth; map generated from real camera data | Physical camera-only iPhone required |
-| Room world maps | Private file upload and secure unarchive on another launch/device; correct sentinel required | Code compiled; hardware/cloud pending |
-| Markers and text | Raycast or explicit measured-distance placement; persisted room-relative pose; task can be edited/deleted | Geometry/serialization tests; device pending |
-| Wall/area outlines | Three or more coplanar 3D vertices restore on the intended surface | Geometry tests; device pending |
-| Map localization | Search, timeout, automatic map recovery after restored-room/stable-tracking evidence; hide overlays on tracking loss | State tests; device pending |
-| Optional fixed marker fallback | Unique printable/importable target, measured dimensions, registration, separate-session alignment | Transform tests; physical detection pending |
-| Legacy manual recovery | Existing saved point pairs can recover with confirmed preview; new scans require no manual dots | Math tests; device pending |
-| Worker walkthrough | Assigned worker loads map/tasks, walks around, opens tapped instruction | Two-device acceptance pending |
-| Task status | Worker saves In Progress/Completed; other task fields protected | Client fixture tests; policy execution pending |
-| Secure cloud persistence | Outsider blocked from tables, files and status RPC; manager shares/revokes | Migration and pgTAP suite supplied; execution pending |
-| Tests and docs | Deterministic tests pass; iOS suites compile; reproducible setup and hardware runbook | See VERIFICATION.md |
+| Native iPhone app | Local Debug installation opens Projects on iOS 17+ without backend login | Build/simulator evidence; install the current revision on each physical phone |
+| Project/room management | Create, rename, delete and relaunch with correct project associations | Deterministic/UI persistence tests; current-device acceptance remains |
+| Camera-only mapping | Real map generated without scene depth on a compatible non-LiDAR iPhone | Physical camera-only test required |
+| Room world maps | Save/restore securely; imported map retains its matching sentinel coordinate anchor | Archive/state tests; physical cross-device recovery pending |
+| Drawings, areas and images | Room-relative poses/vertices and physical image dimensions survive save/relaunch/transfer | Geometry/serialization/disk tests; physical placement pending |
+| Task status | Editable local copy persists status through relaunch and export/import | Local tests; phone acceptance pending; no cross-copy live updates |
+| Map localization | Hide overlays until matching anchor and stable tracking; hide on loss; retry after timeout | State tests; physical recovery accuracy and failure testing pending |
+| Measured-distance placement | Explicit distance positions drawings when plane detection is insufficient | Geometry tests; physical placement pending; not a localization fallback |
+| Surface overview | Consolidate only near-coplanar overlapping miniature patches without moving saved coordinates | Model/budget tests; no full reconstruction or semantic room claim |
+| Scan animation | Native 0.45-second outline fade; miniature targets 60 Hz at ≤8 surfaces, 30 Hz above; static idle/pressure/Reduce Motion | Scheduling/budget tests; no measured phone FPS or crash-resolution claim |
+| Offline project transfer | Project details Export project → native AirDrop/Files; dashboard Import project or open `.sitear`; separate editable copy | Disk/Store tests and [exact phone procedure](../README.md#transfer-a-project-to-the-technician-without-a-backend); two-phone physical test pending |
+| Transfer integrity | Reject unsafe/missing assets, corruption, invalid associations and oversized files; leave no partial project | Automated disk tests; imported real maps must still recover physically |
+| Accounts (course cloud scope) | Register, confirm, sign in, refresh and sign out against live service | Client fixtures exist; backend connection/live Auth deferred |
+| Secure cloud persistence (course scope) | Authorized two-user map/image/task access; outsider blocked; sharing/revocation enforced | Migrations/policy suite exist; live execution deferred; local files provide none of these guarantees |
+| Tests and documentation | Deterministic proof plus reproducible local installation and physical acceptance record | See VERIFICATION.md; do not count unperformed phone/backend steps as passed |
 
-## NICE TO HAVE
+## Local transfer contract
 
-Optional scene depth is enabled when supported. Basic lines and arrows are implemented using the same persisted vertex model. Mesh occlusion, advanced drawing, measurements, offline project synchronization, push notifications, realtime collaboration, progress dashboards and sophisticated six-axis manual alignment are deferred. Do not spend effort on these before recording the two-device camera-only acceptance.
+A `.sitear` file contains a bounded UTF-8 manifest and raw map/image assets, streamed in chunks no larger than 1 MiB and checked with SHA256. Limits: 16 MiB manifest, 256 MiB per asset, 1 GiB total assets, 256 rooms, 2,000 annotations and 100,000 total geometry points. Inactive legacy marker files are excluded.
+
+Import assigns new project/room/annotation IDs and rewrites asset paths, preserving each room's `coordinate_id`, world-map anchor relationship, annotation poses and vertices. Reimport creates another editable copy, not a merge. Existing projects remain separate. Recipients can retain/export their copies; there is no live sync, server authorization or remote revocation. Both phones need their own installed local Debug app. See the [README installation and transfer steps](../README.md).
+
+## Deferred work
+
+Cloud Anchors and Immersal are researched options only; no SDK, provider credentials or hosted/resolved anchors are integrated. Native ARWorldMap remains the active recovery method. A provider prototype, backend connection, live authorization, cloud synchronization, Android support, mesh reconstruction/occlusion, semantic room objects, push notifications and progress dashboards remain future scope. Optional scene depth on supported hardware does not add a LiDAR requirement.
+
+Legacy pin/text/arrow records remain readable, but current creation tools are Draw, Area marking and Image. Do not count removed marker/manual recovery UI as a current feature. Preserve honest history of earlier work without claiming it as active acceptance.
 
 ## 160–240 hour team budget
 
-A realistic 200-hour plan includes substantial device validation, not just coding:
+The earlier 200-hour planning estimate included work on marker/manual recovery and cloud integration. Those are historical planning assumptions, superseded by the current marker-free local-file scope. The following remains a planning allocation, not measured time or proof of completed contributions:
 
 | Work | Hours |
 |---|---:|
-| Setup, auth, Keychain and UI navigation | 22 |
-| Projects, rooms, sharing and task forms | 26 |
-| Map lifecycle, archives and upload flow | 28 |
-| Persistent annotations and surface geometry | 24 |
-| Relocalization, verification and marker fallback | 34 |
-| Manual recovery, interruptions and errors | 16 |
-| Backend, policies and integration testing | 22 |
-| Two-device testing, documentation and fixes | 28 |
+| Setup, existing auth/Keychain and local navigation | 22 |
+| Projects, rooms and task forms | 26 |
+| Real map lifecycle and bounded local transfer | 28 |
+| Persistent annotations and observed surface geometry | 24 |
+| Marker-free relocalization and tracking verification | 34 |
+| Placement, interruptions and recovery errors | 16 |
+| Existing backend/policy work and deferred integration | 22 |
+| Two-device acceptance, documentation and fixes | 28 |
 | Total | 200 |
 
-Use small reviewable commits by layer. SiteAR has its own Git repository and a public GitHub remote at DavidWesthauser/SiteAR. Unrelated parent-directory projects are not included. Suggested commits: core/test fixtures; Supabase schema/policies; auth/project UI; AR map/localization/editor; acceptance documentation. Review changes before committing.
+Use reviewable changes and record actual individual effort separately. The public SiteAR repository is independent of unrelated parent-directory projects. Course cloud acceptance, physical two-phone accuracy and lecturer-approved scope still require evidence before submission.

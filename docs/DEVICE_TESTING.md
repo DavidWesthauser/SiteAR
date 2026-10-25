@@ -5,14 +5,26 @@ Record phone/iOS/app version, room and coordinate IDs, date, lighting and approx
 ## Local scan and drawing
 
 1. Install an unconfigured Debug build through Xcode on the physical phone. The app opens an empty project list without login. Create your own project/room.
-2. Choose Map room. Pan slowly over textured walls, floor and furniture. Verify thin white surface boundaries appear without any filled white faces, the live overview updates, counts represent actual detected planes/features, and Scan abschließen remains disabled until map/tracking readiness.
+2. Choose Map room. Pan slowly over textured walls, floor and furniture. Verify thin white surface boundaries appear without any filled white faces, the live overview updates, counts represent actual detected planes/features, and Finish remains disabled until map/tracking readiness.
 3. Check the floating surface overview and top Cancel/Finish controls. Tap Finish. It must transition directly into drawing in the SAME session. No marker print or reference-dot collection is required.
 4. Aim at a wall and choose Lock view. Move/rotate the phone slightly: the editing viewpoint must stay fixed. With **Draw**, draw a curved stroke, lift your finger, then draw elsewhere. There must be no connecting segment, sample dots or angular boxes. Undo must remove only the last stroke. Save and reopen to check both paths persist. Use **Area marking** for three/four coplanar corners. Use **Image**, import a photo and a transparent PNG, adjust width, tap to place and save. Verify proportions and image bytes survive force-quit/reopen and room recovery. Enter a long title/description through Work details and check keyboard dismissal. Try Undo/Clear/Resume camera. Reopen walkthrough and inspect geometry while moving sideways. No filled plane faces or sample dots should obscure the room. Check compact-screen controls, scrolling, large text, sticky Save, import cancellation and leaving with an unsaved draft.
 5. Close AR and force-quit the app. Reopen the saved room's walkthrough. From the original viewpoints, look around until Room recognized. Drawings must stay hidden before recovery and then appear automatically, without confirming reference dots.
 6. Walk around and compare wall/area placements. Measure approximate error against an agreed target (for example 10 cm); do not infer survey precision. Repeat on another day and under different lighting.
 7. Tap a drawing, save In Progress/Completed and refresh/relaunch to verify task persistence. Create/rename/delete unrelated rooms and ensure the saved drawing stays with the correct room.
 
-## Cloud/two-device acceptance
+## Local file / two-phone acceptance (current workflow)
+
+1. Install an unconfigured Debug build on manager A and technician B; at least one phone must have no LiDAR. Keep the backend disconnected and use no fixed markers or reference-dot selection.
+2. On A scan a real room, save separate drawing strokes, an area and an image instruction, and update a task status. Relaunch and verify local persistence.
+3. Open project details → Export project. AirDrop the `.sitear` file or Save to Files and transfer it. On B select Import project in Projects, or open the file in SiteAR from Files. The native picker must allow cancellation without a partial import.
+4. Check B has the expected rooms, images, task statuses and geometry. Existing projects must remain unchanged. A repeated import creates another editable copy. With an active search, opening an external file must clear the filter and report import success without closing an unsaved AR editor.
+5. In the actual room use B's walkthrough. From overlapping scanned viewpoints wait for map recovery, then inspect drawing placement from several positions. Record time and physical error; repeat days later and in changed lighting. Before recovery drawings must stay hidden.
+6. Update B's copy, export it back and import on A. It must create another independent copy, with no silent overwrite/merge. Local files do not provide role protection, live synchronization or revocation.
+7. Try a corrupt/truncated copy and a file with missing assets in a disposable test. Report the error with no partial project/assets; existing data must survive relaunch. Preserve the original valid file. Portable disk tests cover additional structural/path/checksum and metadata-write failures.
+
+## Deferred cloud/two-device acceptance
+
+Do not connect the backend for the current file-transfer test. Use [backend setup](BACKEND_SETUP.md) when cloud work resumes.
 
 1. Apply migrations 001, 002 AND 003 to a development Supabase project. Configure matching backend settings in both phone builds, register two users, and sign in manager on A and worker on B. Local rooms do not migrate automatically; create a new cloud test project/room.
 2. Repeat scan/drawing creation on A. Verify the room's map_path and surfaces metadata and its private map object exist. Share with B's registered email and end the session on A.
@@ -24,13 +36,11 @@ Record phone/iOS/app version, room and coordinate IDs, date, lighting and approx
 - **Timeout:** enter a different room or change lighting significantly. Wait 40 seconds. No drawings should appear at a new arbitrary origin. Return to the original viewpoints, choose Scan room again and recover.
 - **Tracking loss:** cover the lens/move too quickly. Drawings must disappear, recognition restarts, and normal tracking plus correct saved-map evidence is required to show them again.
 - **Interruption/background:** lock/unlock or background. New scans restart with guidance; saved rooms recover again. Draft drawing points stay room-relative while the screen remains alive. Leaving warns before discarding unsaved work.
-- **Optional marker:** during a NEW scan expand Optional recovery marker, print/fix/calibrate/register a unique image and save. Later choose Scan fixed marker. Check the position and explicitly confirm. Test from a different session origin/yaw, then move away so the image leaves view; drawings must remain fixed. A moved print must be rejected.
-- **Legacy manual fallback:** existing rooms with two saved references still offer manual recovery. Capture them in order and explicitly confirm. New scans must not require this workflow.
 - **Poor planes:** on a textureless wall, a failed raycast must report/skip placement rather than invent a depth. Explicit measured-distance placement must require a real user measurement.
 - **Plane merging:** revisit the same wall; merged plane anchors should replace old patches/counts. Counts are not a promise of unique architectural walls or complete room coverage.
 - **Black video:** verify camera permission, stop Device Hub screen viewing, close/reopen AR directly on the phone. Do not attempt to verify live AR through mirroring.
 - **Persistence failures:** disconnect during cloud upload/task save. Unsaved work remains available for retry. Room metadata publishes only after the assets exist; lost-response retries must not replace coordinates.
-- **Invalid data:** corrupt a development map/version only in a disposable test room. Invalid data blocks rendering with an error. Optional marker recovery can still work if present; otherwise task lists remain available.
+- **Invalid data:** corrupt a development map/version only in a disposable test room. Invalid data blocks rendering with an error. Drawings must remain hidden and task lists remain available; there is no physical-marker fallback.
 - **Permissions:** outsider cannot read project/maps/tasks. Workers cannot change drawing geometry or share projects. Revoke worker access and reload; new requests must fail/omit data. Run `supabase test db` too.
 
 Do not mark physical acceptance complete until same-phone persistence and two-phone recognition are recorded. Simulator/Core tests verify state/math/navigation, not camera recognition or physical accuracy. RoomPlan-style classified furniture boxes are not part of the camera-only plane visualization.
@@ -44,14 +54,14 @@ Do not mark physical acceptance complete until same-phone persistence and two-ph
 ## Multi-view recognition acceptance (physical testing pending)
 
 1. Create a new room revision. Walk to at least three safe positions 0.5 m apart and view all four horizontal directions. Stand still and rotate first: this must not finish the movement requirement. Scan the same textured details from overlapping viewpoints.
-2. Save drawings, end the session and reopen from the entrance, an opposite corner and the middle of the room in separate sessions. Record recovery time and placement error against the same physical marks for each viewpoint; do not label arbitrary-point recognition as accepted.
+2. Save drawings, end the session and reopen from the entrance, an opposite corner and the middle of the room in separate sessions. Record recovery time and placement error against the same known physical features for each viewpoint; do not label arbitrary-point recognition as accepted.
 3. Repeat facing a blank wall, after changed lighting, and after moving furniture. Uncertain recovery must keep drawings hidden. After timeout, continue searching without a session reset, then test the separate restart action.
 4. Repeat using an older sparse map. The new capture guidance cannot improve that map retroactively; preserve its annotations and use a new room revision to compare broader capture.
 
 ## Animated scan acceptance (not yet run on hardware)
 
-- On first detection, confirm white edges trace in once, with a subtle halo. Continue scanning the same patch: its outline must refine without repeatedly disappearing/restarting. Check thin outlines leave the camera unobstructed.
-- Watch the miniature gain only observed patches, with shaded thin surfaces. Turn the phone across the +/-180-degree heading boundary: it should turn smoothly, not spin the long way. Look at floor/wall junctions and check depth ordering from several headings.
+- On first detection, confirm white edges fade in once on iOS 18+ (appear directly on iOS 17), with a subtle halo. Continue scanning the same patch: its outline must refine without repeatedly disappearing/restarting. Check thin outlines leave the camera unobstructed.
+- Watch the miniature gain only observed patches, conservatively combining overlapping coplanar patches without bridging unseen gaps, with shaded thin surfaces. Turn the phone across the +/-180-degree heading boundary: it should turn smoothly, not spin the long way. Look at floor/wall junctions and check depth ordering from several headings.
 - Enable Settings → Accessibility → Motion → Reduce Motion. New surfaces should appear without the growing/reveal effect. Repeat a scan and background/return to check removed/restarted plane geometry does not linger.
 - Compare appearance and performance on the iPhone 12 mini. Classifying windows/furniture like Apple's RoomPlan video is not an acceptance claim for this camera-only path; physical registration/recognition must still pass separately.
 

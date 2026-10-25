@@ -2,223 +2,106 @@
 
 [Public GitHub repository](https://github.com/DavidWesthauser/SiteAR)
 
-Native iPhone spatial work instructions, built with SwiftUI, ARKit, RealityKit and Supabase. iOS 17+, A12 or newer recommended; **LiDAR is not required**. Open **`SiteAR.xcodeproj`** and choose the **SiteAR** scheme. There are no third-party iOS dependencies.
+Native iPhone spatial work instructions built with SwiftUI, ARKit and RealityKit. iOS 17+, A12 or newer recommended; **LiDAR is not required**. Open `SiteAR.xcodeproj` and choose the **SiteAR** scheme. There are no third-party iOS dependencies.
 
-The repository contains the application implementation, a reproducible backend and automated tests. **Cross-device AR accuracy has not yet been verified on hardware.** Do not treat compilation or mathematical tests as evidence of real-world localization accuracy. See [verification status](docs/VERIFICATION.md).
+**The current workflow is local-only. Do not connect a backend for this test.** An unconfigured Debug build opens an empty project list without login and stores real world maps, instruction images and tasks in Application Support (`SiteAR/local.json` and `SiteAR/assets/`). Export/import transfers a separate editable project copy in one `.sitear` file. There is no live synchronization or remote revocation. Deleting the app deletes its local data.
 
-## Run without login while Supabase is unconfigured
+Cross-device room recovery and physical placement accuracy still require hardware acceptance. Compilation, mathematical tests and file roundtrips do not establish real-world localization accuracy. See [verification status](docs/VERIFICATION.md).
 
-Unconfigured **Debug builds** open directly into an empty project list. Create your own project and room, then choose **Map room** on a physical iPhone. Real ARWorldMaps, marker images, instructions and task changes are saved in the app's Application Support directory (`SiteAR/local.json` and `SiteAR/assets/`). There is no example project or pre-placed AR content. Relaunching restores your saved data; deleting the app deletes these local files.
+## Install on a manager or technician iPhone
 
-The simulator can exercise navigation and room management; it cannot perform camera-based room mapping. Cloud sharing needs Supabase. Configure Supabase and rebuild to restore normal account authentication; local projects are kept separate and are not automatically uploaded. Release builds continue to require backend configuration.
+Each phone needs the app installed separately. For the current local test use a **Debug** build without Supabase settings; Release builds still require backend configuration.
 
-## First-time installation on your own iPhone (including Germany)
+1. On the Mac, open Xcode, accept its licence and finish installing the iOS platform components. Open **Xcode → Settings → Apple Accounts** (Accounts in older versions) and sign in with your Apple Account.
+2. Connect the unlocked iPhone with a data-capable USB cable. Accept accessory access on the Mac and **Trust This Computer? / Diesem Computer vertrauen?** on the phone.
+3. Open **Window → Device Hub** (or **Devices and Simulators**), select the phone and finish pairing/device preparation.
+4. Enable **Settings → Privacy & Security → Developer Mode** / **Einstellungen → Datenschutz & Sicherheit → Entwicklermodus** on the iPhone. Restart, unlock and confirm **Enable / Aktivieren**. If the setting is missing, initiate Xcode pairing first. See [Apple's Developer Mode instructions](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device).
+5. Open `SiteAR.xcodeproj`. Select the **SiteAR** target → **Signing & Capabilities**, enable **Automatically manage signing** and choose your Personal Team or paid team. Use a unique bundle identifier, for example `de.yourname.sitear.dev`. The checked-in bundle identifier is `de.davidwesthauser.SiteAR`; choose one your team can sign. If editing settings directly, change `PRODUCT_BUNDLE_IDENTIFIER` in `SiteAR/Resources/Config.xcconfig`.
+6. Select the **SiteAR** scheme, **Debug** configuration and the physical phone as destination. Leave `SiteAR/Resources/Secrets.xcconfig` absent/unconfigured. Click **▶ Run** / **Command-R** and allow signing/device registration if prompted.
+7. If iOS reports an untrusted developer, follow its trust prompt under **Settings → General → VPN & Device Management**. Otherwise no extra trust step is needed. The app should open Projects directly, without registration.
+8. Allow camera access when opening **Map room** or a walkthrough. Test using the actual phone screen. Keep Device Hub's physical-device **View Screen/mirroring off**: [Apple documents that it blocks camera access](https://developer.apple.com/documentation/xcode/interacting-with-your-app-in-device-hub). USB debugging may remain connected.
+9. Repeat these steps for the technician's iPhone. Keep the same team and bundle identifier when renewing each existing installation so its local data survives.
 
-You need your Mac, Xcode, an Apple Account, a USB data cable, an internet connection and an ARKit-compatible iPhone running **iOS 17 or later**. LiDAR is not needed. Xcode is already installed at `/Applications/Xcode.app` on the Mac used for this repository.
+Germany uses this same Xcode workflow. A free Apple Account / Personal Team is enough for initial local testing; its provisioning expires after seven days. Reconnect and Run over the existing app, rather than deleting it. See [Apple's account guidance](https://developer.apple.com/help/account/basics/about-your-developer-account) and [physical-device installation](https://developer.apple.com/documentation/xcode/running-your-app-on-simulated-or-physical-devices). Do not assume a development `.app` can be sent by AirDrop and installed on an unsigned technician phone.
 
-Germany uses the same direct Xcode development workflow. Developer Mode is a general requirement for this workflow. You can test with a **free Apple Account / Personal Team**; a paid Apple Developer Program membership is not required for this app's initial on-device test. With a Personal Team, provisioning expires after **7 days**: reconnect and run from Xcode again. This matters when testing persistence over several days—reinstall over the existing app rather than deleting it. See [Apple's account and Personal Team guidance](https://developer.apple.com/help/account/basics/about-your-developer-account).
+The simulator can exercise lists and file handling, but cannot map or recognize a room through a real camera. If the app asks for backend configuration, check that you selected Debug and left backend secrets unconfigured. Camera permission can be restored in iPhone Settings → Privacy & Security → Camera.
 
-For a local iPhone test, complete steps 1–2 and 5–6; you can skip Supabase steps 3–4 for now. An unconfigured Debug build saves real maps and instructions on your phone without login. Set up Supabase when you want accounts and cross-device sharing.
+## Scan, draw and recognize the room again
 
-### 1. Prepare Xcode on the Mac
+1. Create a project and room, then choose **Map room**. Move slowly around textured walls, corners and the floor. Thin boundaries indicate detected plane patches. The shaded miniature is an overview of observed surfaces; Options shows direction/position evidence and map readiness.
+2. Observe all four horizontal heading sectors from at least three positions separated by 0.5 m. Spinning in place is insufficient. Once tracking is stable, the map is ready and at least one plane is detected, choose **Finish**. This saves the map and continues drawing in the same session. These gates do not prove complete coverage.
+3. Aim at a detected surface. **Lock view** holds the image and drawing plane while ARKit continues tracking. Choose **Draw**, **Area marking** or **Image**. Lifting your finger ends a freehand stroke; the next stroke remains separate. Undo removes the last stroke. Areas use tapped coplanar corners.
+4. For an image, select a photo or PNG/JPEG file, adjust its physical width and tap to place it. Work details hold the title, description and priority. Save from the fixed bottom bar. Up to 32 strokes, 256 samples per stroke and 2,048 samples total are supported per drawing; use multiple instructions for longer work.
+5. Initial raycast placement requires stable detected plane geometry within 0.15–5 m. Mint highlighting indicates a placement gate, not measured physical accuracy. Explicit measured-distance placement is available when surface detection is poor. It affects drawing placement; it does not recover a room coordinate frame.
+6. Close AR, force-quit, relaunch and choose **Start AR walkthrough**. Look at recognizable views observed during the original scan. Saved drawings appear only after ARKit restores the matching room anchor and stable tracking. On failure use **Keep searching** or explicitly restart recovery with **Scan room again**. Tracking loss hides overlays; the task list stays available.
+7. Walk around the instructions and update task status. Save before leaving; force-quitting loses unsaved drafts. To replace a map after major physical changes, create a new room revision rather than moving existing instructions silently.
 
-1. Open **Xcode** from Applications. Accept its licence and let any first-launch component installation finish. If asked which platforms to install, include **iOS**.
-2. Open **Xcode → Settings → Apple Accounts** (called **Accounts** in some versions).
-3. Click **+**, choose Apple Account if prompted, and sign in. Complete two-factor authentication.
-4. Your account should show a **Personal Team**, or your existing paid team. If Apple asks you to accept a developer agreement, follow that prompt; free developer registration is available at [developer.apple.com/account](https://developer.apple.com/account/).
-5. For command-line builds, choose this Xcode under **Xcode → Settings → Locations → Command Line Tools**. Clicking Run in Xcode does not require a Terminal command.
+There are no fixed markers, printed targets, stickers, QR references or selected reference dots. Marker capture/detection and manual-reference recovery have been removed. Older serialized fields still decode for compatibility but are inactive. Native ARWorldMap recovery is the current localization method. Recognition is not guaranteed from any position, blank walls, changed lighting or rearranged furniture.
 
-### 2. Connect and prepare the iPhone
+## Transfer a project to the technician without a backend
 
-1. Unlock the iPhone and connect it to the Mac with a **data-capable** USB cable. Keep it unlocked during setup.
-2. If the Mac asks whether to allow the accessory to connect, click **Allow**.
-3. On the iPhone, accept **Trust This Computer?** / **Diesem Computer vertrauen?**, tap **Trust / Vertrauen**, and enter the iPhone passcode.
-4. In Xcode, open **Window → Device Hub**, or **Window → Devices and Simulators** in older versions. Select your iPhone and finish pairing if requested. Let device preparation finish; the first connection may take several minutes.
-5. On the iPhone open **Settings → Privacy & Security → Developer Mode**. With German system language: **Einstellungen → Datenschutz & Sicherheit → Entwicklermodus**. It is near the bottom of the page.
-6. Turn Developer Mode on and accept the restart. After restarting, unlock the phone, confirm **Enable / Aktivieren**, and enter its passcode if requested.
-7. Reconnect/unlock the phone if needed and wait until Xcode shows it ready.
+1. On manager phone A, save a real mapped room, a drawing/area and an image instruction. Change a task's status. Close and reopen the project to check that the saved data is present.
+2. In **project details**, choose **Export project**. Use the native share sheet to **AirDrop** the `.sitear` file to phone B or **Save to Files** and transfer it through Files. Export contains that project's records and referenced world-map/image files.
+3. On phone B, with the local Debug app installed, choose **Import project** on the Projects dashboard and select the file. Alternatively open the `.sitear` file from Files/AirDrop in SiteAR. The backend remains unconnected throughout.
+4. Confirm the imported project contains the expected room names, instructions, image, task status and physical dimensions. Import creates new project, room and annotation IDs. It preserves each room's `coordinate_id`, map anchor relationship and instruction poses/vertices, and rewrites asset paths for the new copy.
+5. In the same physical room, start the imported room's walkthrough. Observe previously scanned details until recovery succeeds; compare each instruction against the real surface. Record recovery time and physical error. End the session and repeat after relaunch. **This two-phone physical test is still pending.**
+6. Edit a title/status or add a drawing on B, then verify A remains unchanged. Export B's edited project and import it on A: it becomes another independent copy, not a merge or update of the original.
+7. Cancel an import and check the existing projects remain unchanged. Try a truncated/corrupted copy and confirm an error leaves no partial project. Keep the original file intact for comparison. Automated disk tests additionally cover traversal, symlinks, duplicate IDs, coordinate mismatch and cleanup.
 
-**If Developer Mode is missing:** first initiate pairing in Xcode, then check the iPhone settings again. Apple only exposes the setting after pairing has started or the device was previously paired. Follow [Apple's Developer Mode instructions](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device).
+The file uses a bounded JSON manifest followed by raw asset bytes, streamed in chunks of at most 1 MiB; assets are not base64-encoded. Limits are **16 MiB manifest, 256 MiB per asset, 1 GiB total assets, 256 rooms, 2,000 annotations and 100,000 total geometry points**. SHA256 verifies each asset. Missing files, invalid paths or associations, unsupported versions, corruption, truncation and trailing bytes are rejected. Legacy inactive marker images are not included.
 
-### 3. Set up a hosted Supabase development project (optional for local testing)
+Anyone who receives a copy can retain and edit it. Local transfer has no server authorization, live status updates, merge, synchronization or remote revocation. It does **not** satisfy the course's cloud-persistence/account requirements.
 
-Using the hosted dashboard is the simplest first test; no Supabase CLI, Docker or local server is needed.
+## Surface appearance and performance limits
 
-1. Open [Supabase Dashboard](https://supabase.com/dashboard), sign in and create a **new development project**, for example `SiteAR-test`. Choose a nearby European region, such as Frankfurt if offered. Wait for provisioning to finish.
-2. Open the project's **SQL Editor** and create a new query.
-3. On the Mac, open `supabase/migrations/202610230001_sitear.sql` in a text editor. Copy **the entire file**, paste it into the SQL Editor, and click **Run**. Then run `supabase/migrations/202610230002_scan_and_draw.sql` the same way. Then run `supabase/migrations/202610230003_images_and_strokes.sql`. Run these migrations once each, in order, on the new project. It creates the tables, access policies, functions and private `room-assets` bucket. If it reports an error, resolve that before continuing; do not repeatedly rerun parts at random.
-4. In **Table Editor**, check that `projects`, `memberships`, `rooms` and `annotations` exist. In **Storage**, check that `room-assets` exists and is **private**. The bucket starts empty.
-5. Open **Authentication → Sign In / Providers** (or **Providers**, depending on the dashboard version), select **Email**, and allow email/password sign-up.
-6. For a dedicated first-test project, you can turn **Confirm Email** off and save. This lets you create test accounts without configuring email delivery. For production, enable confirmation and configure SMTP. If confirmation stays on, confirm the email before signing in. See [Supabase's email settings](https://supabase.com/docs/guides/auth/general-configuration).
-7. Open the project's **Connect** dialog and copy its **Project URL** and **publishable key**. Alternatively, find the key under **Settings → API Keys**. The URL looks like `https://abcdefghijklmnopqrst.supabase.co`; a new publishable key starts with `sb_publishable_`. See [Supabase's URL/key instructions](https://supabase.com/docs/guides/api/creating-routes).
+`RoomSurfaceModel` conservatively consolidates near-coplanar overlapping patches for the miniature only. It does not reconstruct a full room, mesh, furniture, windows or other semantic objects. Original ARKit raycast geometry, saved map coordinates and annotation poses remain unchanged. LiDAR/RoomPlan and Gaussian Splatting are not integrated.
 
-Do **not** run `supabase/seed.sql` on this hosted project. It is for the local development stack only. Create your test users through the app. Do not copy a database password, secret API key or service-role key into the iOS app.
+RealityKit displays at most 24 nearby outlines, using a batched edge mesh and optional halo per outline; new outlines use a native **0.45-second opacity fade** on iOS 18+ (immediate display on iOS 17), without a CPU-stepped boundary trace. The miniature caches up to 24 patches with 12 samples each. While animating it targets **60 Hz for up to eight surfaces and 30 Hz above eight**; it is static when settled, under reduced-detail pressure or with Reduce Motion. These are scheduling targets, **not measured phone FPS**.
 
-### 4. Put the backend settings in the app (if using Supabase)
+Memory warnings or serious thermal pressure reduce outlines to 12 without halos and simplify the miniature. Metadata stays bounded to 128 patches with 64 samples each; active placement has a separate bounded stability tracker. These measures limit visualization work, not ARKit's internal map memory. A 600-surface simulator stress fixture verifies budgets and preservation of instructions, not a fix for a physical crash. Camera-only recovery, long scans, thermal behavior and memory still need device measurements.
 
-1. In Finder, open this repository, then `SiteAR/Resources`.
-2. Duplicate **`Secrets.example.xcconfig`** and name the copy exactly **`Secrets.xcconfig`**. Check that the filename is not `Secrets.xcconfig.txt`. Use a plain-text editor such as Xcode to edit it.
-3. Replace the two settings with your actual project values:
-
-   ```xcconfig
-   SUPABASE_URL = https:/$()/abcdefghijklmnopqrst.supabase.co
-   SUPABASE_ANON_KEY = sb_publishable_REPLACE_WITH_YOUR_ACTUAL_KEY
-   ```
-
-   Replace the example project reference and key. **Keep `https:/$()/` exactly as written**: Xcode expands it into `https://`; a literal `//` starts an xcconfig comment. Do not add quotes. The setting name `SUPABASE_ANON_KEY` is retained by this app even when its value is a newer publishable key. A legacy `anon` key is also supported.
-4. Save the file. `Config.xcconfig` already includes it; you do not need to add it to Copy Bundle Resources. It is ignored by Git.
-
-### 5. Open the project and configure signing
-
-1. In Finder, double-click **`SiteAR.xcodeproj`** in the repository root. Open the Xcode project, rather than just `Package.swift`.
-2. In Xcode's left sidebar, click the blue **SiteAR project** icon. Under **TARGETS**, choose **SiteAR**.
-3. Open **Signing & Capabilities**, enable **Automatically manage signing**, and choose your **Personal Team** or existing paid team.
-4. Give the app a unique **Bundle Identifier**, for example `de.david.sitear.dev` (substitute your own unique name). This identifies your app to Apple's signing system; you do not need to own that domain for a local test.
-5. If you prefer editing the repository setting directly, change `PRODUCT_BUNDLE_IDENTIFIER` in `SiteAR/Resources/Config.xcconfig`. The default `com.example.SiteAR` is a placeholder. The optional Secrets file is included *before* that default, so putting a bundle identifier only in Secrets.xcconfig does not override it.
-6. At the top of Xcode, select the **SiteAR** scheme and choose **your physical iPhone's name** as the run destination. Do not choose a simulator or the generic “Any iOS Device” destination.
-7. Allow Xcode to register the device/create signing assets if prompted. Ordinary Run builds the app; you only need to configure the test targets' signing too if you later run on-device tests.
-
-Apple documents this [physical-device signing and Run workflow](https://developer.apple.com/documentation/xcode/running-your-app-on-simulated-or-physical-devices).
-
-### 6. Install and launch
-
-1. Leave the iPhone connected and unlocked. Click Xcode's **▶ Run** button or press **Command-R**.
-2. Wait for the build and installation. Xcode should launch **SiteAR** on the phone.
-3. If iOS says the developer is untrusted, open **Settings → General → VPN & Device Management** / **Einstellungen → Allgemein → VPN und Geräteverwaltung**. Under the development-app entry, select your own developer account and follow the trust/verification prompts. Then run again. This step only applies if iOS presents that message.
-4. Without Supabase, the Debug build opens Projects directly; skip registration. With Supabase configured, turn on **I need an account**, enter an email and password of at least eight characters, and tap **Register**. With email confirmation disabled for the test project, you should enter Projects directly. Otherwise confirm your email, return to the app and sign in.
-5. Create a project and a room. Open **Map room**, and allow camera access when asked.
-6. Test by looking through and moving the **actual iPhone camera**. Keep Device Hub’s **View Screen** / physical-device mirroring off: Apple disables camera access during that interaction, which produces black AR video. The USB cable and Xcode debugger can remain connected.
-
-Once installed, you can open SiteAR from its Home Screen icon. You can disconnect the USB cable for walking around; keep internet access for cloud loads/saves. If a free team's provisioning expires, reconnect and press Command-R to reinstall over the existing app. Do not delete the app just to renew its signature.
-
-### 7. Scan → draw → recognize the room again
-
-1. In your project add a room, choose **Map room**, and move slowly around textured walls and the floor. The scan screen has Cancel/Finish at the top and a floating live surface overview below. Thin white boundaries mark ARKit-detected plane patches; there are no filled wall/floor faces obscuring the camera. The floating miniature and compact **Live scan** indicator leave the camera clear. Open the lower-left **Scan options and progress** control for direction/position counts and map readiness. It is not a percentage of the whole room covered.
-2. Walk through the room, looking in all four directions from at least three positions separated by 0.5 m. The overview shows viewing-direction and position counts; spinning in place is insufficient. These are movement checks, not a guarantee of whole-room feature coverage. When those checks pass, tracking is stable, ARKit has a usable world map and at least one plane is detected, tap **Finish**. This saves the room and continues directly into drawing in the **same AR session**. No manual reference dots, marker print, or separate confirmation is required.
-3. Aim at a detected surface and choose **Lock view** to hold the camera image and drawing plane. The editor has three tools: **Draw**, **Area marking**, and **Image**. For drawing, drag your finger; **lifting your finger ends the stroke**. Drawing elsewhere starts a separate stroke without a connecting line. Rounded, smoothed strokes have no visible sample dots. Undo removes the last stroke. **Area marking** uses tapped coplanar corners.
-4. Choose **Image**, select a photo or PNG/JPEG file, adjust its physical width, then tap the surface to place it. Its aspect ratio is preserved. The real image file and room-relative placement are saved together and restored on reopening. Optional title, description and priority are entered in **Work details**; these are task details attached to your drawing, area or image. Existing older pin/text/arrow instructions still load, but their creation tools are removed.
-5. Tap **Save** in the fixed bottom bar. **Live camera** returns to live AR; tracking continues while the image is frozen, and tracking loss releases it. The first placement locks the surface even in live mode. The aimed plane is highlighted in mint before placement; the editor shows its orientation and distance. Placement requires detected plane geometry within 0.15–5 m: estimated-plane fallback is disabled to avoid silently guessing depth. A boundary is not a window/furniture detector or a guarantee of physical accuracy. If surface detection is poor, use the measured-distance placement settings. Use **Scan more surfaces** to inspect missed walls; outlines show detected patches, not complete coverage. Worker outlines default off.
-6. Images, drawings and tasks persist in room coordinates. Drawings allow up to 32 independent strokes, 256 samples per stroke and 2,048 samples total. Save longer drawings as several instructions. Portrait orientation is fixed. Save before closing; force-quitting loses unsaved work.
-7. Close AR, force-quit SiteAR, then reopen the saved room and choose **Start AR walkthrough**. Look around from viewpoints used in the original scan. After ARKit recovers the saved map, restores the correct room anchor and provides stable normal tracking, drawings appear automatically. No reference-dot selection is required.
-8. Walk around the drawings, open a task and change its status. If tracking is lost, overlays hide while the app attempts to recover the saved room. If recognition times out, choose **Keep searching** to continue the same session. Look at distinctive details from areas visited while mapping; **Scan room again** explicitly restarts recovery. The app does not display drawings at an arbitrary origin.
-9. For another user's phone, configure Supabase, install all three migrations, share the project, and open the same room on that device. Local-only rooms stay on their original phone and are not automatically uploaded.
-
-An **optional recovery marker** is available in a collapsed section while scanning. Existing rooms with saved reference points retain manual recovery; creating new rooms does not require them. If fallback marker/manual alignment is used, it still requires explicit confirmation. Never confirm a moved marker.
-
-Apple's RoomPlan demo uses LiDAR to classify and outline room objects. This app uses ARKit plane detection on camera-only iPhones such as the iPhone 12 mini. Its live surface boundaries and shaded miniature represent detected plane patches, **not** classified furniture, a complete architectural model, or proof that every wall is scanned. See [Apple's RoomPlan description](https://machinelearning.apple.com/research/roomplan).
-
-### First-install troubleshooting
-
-| What you see | What to do |
-|---|---|
-| iPhone absent from Xcode's device list | Unlock it, use a data cable, accept Trust, and open Device Hub / Devices and Simulators to pair. |
-| Developer Mode missing or disabled | Initiate Xcode pairing first, then enable it in Datenschutz & Sicherheit, restart and confirm. A managed phone may require its administrator's help. |
-| “Signing requires a development team” | SiteAR target → Signing & Capabilities → choose your team and enable automatic signing. |
-| Bundle identifier unavailable | Choose a unique identifier instead of `com.example.SiteAR`. |
-| Xcode says the iOS version/device support is unavailable | Install an Xcode version that supports the phone's installed iOS and finish its required platform/component downloads. |
-| App installed but reports “Configure SUPABASE_URL…” | Check the exact Secrets.xcconfig filename and values, preserve the URL escape, save, then rebuild with Command-R. |
-| “Email not confirmed” / no confirmation email | In the development project's Auth settings disable confirmation for initial test accounts, or configure SMTP and complete confirmation. Check existing test users in Authentication → Users. |
-| Missing table/function or access-policy errors | Check that the full migration succeeded on the same Supabase project whose URL/key you copied. |
-| Camera view is black while controls appear | Stop Device Hub physical-device screen viewing/mirroring, close and reopen AR on the iPhone. [Apple documents that mirroring blocks the camera](https://developer.apple.com/documentation/xcode/interacting-with-your-app-in-device-hub). |
-| Camera permission denied | iPhone Settings → Privacy & Security → Camera (Datenschutz & Sicherheit → Kamera) → enable SiteAR. |
-| App stops launching after about seven days | Reconnect, select the same team and bundle ID, and Run from Xcode again; free Personal Team provisioning expires. |
-
-For CLI-based backend setup instead of the hosted dashboard, run `supabase login`, `supabase link --project-ref YOUR_PROJECT_REF`, then `supabase db push`. Cloud account and sharing workflows require Supabase. Unconfigured Debug builds support real AR with on-device persistence.
-
-## Run the workflow
-
-**Create project → add room → scan → finish scan & draw → save drawings → return later → scan to recognize room → view drawings and complete tasks.**
-
-Use the step-by-step procedure above. Each room has its own immutable saved map and coordinate system. To replace a map after major physical changes, create a new room revision rather than silently moving existing instructions. Managers can edit/delete drawings and share cloud projects; workers can view drawings and update task statuses. Task lists remain accessible when localization is unavailable.
+The earlier animation revision `88d4de7` was installed and launched on an iPhone 12 mini. That historical result does not validate the current transfer/rendering changes or physical AR accuracy. See [verification](docs/VERIFICATION.md) for current evidence.
 
 ## Tests
 
-Portable macOS tests (spatial core, backend with URLProtocol fixtures, view models; no credentials needed):
+Portable macOS tests use disk fixtures and injected network fixtures, without credentials or backend connection:
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 ```
 
-In a restricted environment set `CLANG_MODULE_CACHE_PATH=/tmp/sitear-module-cache` and `SWIFTPM_MODULECACHE_OVERRIDE=/tmp/sitear-module-cache`, and use `--scratch-path /tmp/sitear-swift-build`. `--disable-sandbox` may be needed for SwiftPM inside an existing sandbox.
+In a restricted environment set `CLANG_MODULE_CACHE_PATH=/tmp/sitear-module-cache` and `SWIFTPM_MODULECACHE_OVERRIDE=/tmp/sitear-module-cache`, then use `--disable-sandbox --scratch-path /tmp/sitear-swift-build` if needed.
 
-Build app and test bundles without running a simulator:
+Build app/test bundles without running a simulator:
 
 ```sh
-xcodebuild -project SiteAR.xcodeproj -scheme SiteAR \
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project SiteAR.xcodeproj -scheme SiteAR \
   -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath /tmp/sitear-derived CODE_SIGNING_ALLOWED=NO build-for-testing
 ```
 
-Run tests with an **installed** simulator runtime, replacing the device name with one from `xcrun simctl list devices available`:
+Run iOS tests against an installed simulator runtime, replacing the device name as needed:
 
 ```sh
-xcodebuild -project SiteAR.xcodeproj -scheme SiteAR \
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project SiteAR.xcodeproj -scheme SiteAR \
   -destination 'platform=iOS Simulator,name=iPhone 17' test
 ```
 
-Three local UI workflows run without a backend: project rename/relaunch, room rename/delete/relaunch, and scan entry with an asserted unsupported-AR error in the simulator. Empty project input is also rejected. Auth validation explicitly skips in local mode. The separate cloud navigation/CRUD UI test requires a dedicated test account. In **Edit Scheme → Test → Arguments → Environment Variables**, set `SITEAR_TEST_EMAIL` and `SITEAR_TEST_PASSWORD`. It creates and deletes only its uniquely named test project. It skips explicitly when credentials are absent. A previously signed-in account should be signed out before the authentication UI test. Do not use a production account for tests.
+Local UI suites exercise project/room persistence and unsupported simulator AR. Cloud tests explicitly skip without dedicated test credentials. The deferred [backend setup guide](docs/BACKEND_SETUP.md) preserves hosted configuration, all three migrations, local seed data and policy-test commands. Supabase migrations, policy tests and client code remain in the repository for future work; they have not been connected for this local workflow. Do not infer live authentication or policy acceptance from mocked network tests.
 
-Local Supabase (requires CLI and Docker):
+## Repository and course scope
 
-```sh
-supabase start
-supabase db reset
-supabase test db
-```
+- `SiteAR/App`: entry point and application Store.
+- `SiteAR/Core`: spatial models, validation, transfer codec and display geometry.
+- `SiteAR/AR`: ARKit lifecycle, secure world-map archive, raycasts and RealityKit geometry.
+- `SiteAR/Services`: existing Supabase client, token refresh and Keychain code; deferred for this workflow.
+- `SiteAR/Views`: native project/room/task lists, file transfer and AR tools.
+- `supabase`: existing migrations, private Storage/RLS policies and test fixtures.
+- `SiteARTests`, `SiteARAppTests`, `SiteARUITests`: deterministic, service and UI tests.
+- `scripts/generate_project.py`: deterministic project regeneration.
 
-The seed creates `manager@sitear.test`, `worker@sitear.test`, `outsider@sitear.test` with password `SiteAR-local-2026!` and an **unmapped** fixture room. These identities are only for the local development stack. Never run seed.sql in production. No fake map or simulated AR event is used in the real application. The pgTAP test supplies synthetic spatial metadata inside a rolled-back SQL transaction exclusively to test access rules.
+See [architecture](docs/ARCHITECTURE.md), [requirements](docs/REQUIREMENTS.md), [localization decision](docs/decisions/0001-marker-free-shared-localization.md), [hardware runbook](docs/DEVICE_TESTING.md) and [verification](docs/VERIFICATION.md). Cloud Anchors/Immersal remain research options; no provider SDK is integrated.
 
-To connect a physical iPhone to a local Supabase stack, expose it through a trusted HTTPS development endpoint and configure that URL. `localhost` on the phone is the phone itself. Prefer a separate hosted development project for the two-device AR test. Do not disable App Transport Security globally.
+The [course audit](docs/COURSE_AUDIT.md) separates implementation from accepted requirements. Local export/import does not close mandatory cloud persistence or account acceptance. Backend activation, live policy testing, physical AR evidence and lecturer-approved two-person scope remain future work.
 
-## Repository
-
-- `SiteAR/App`: entry point and observable application store.
-- `SiteAR/Core`: versioned spatial models, rigid-transform validation, alignment calculations and localization state machine.
-- `SiteAR/AR`: ARKit session lifecycle, secure world-map archive, image detection, raycasts, RealityKit geometry and marker printing.
-- `SiteAR/Services`: Supabase Auth/REST/Storage client, token refresh and Keychain storage.
-- `SiteAR/Views`: authentication, projects/rooms/sharing, AR tools, tasks and settings.
-- `supabase`: migration, private bucket/RLS policies, local fixtures and policy tests.
-- `SiteARTests`, `SiteARAppTests`, `SiteARUITests`: deterministic and UI tests.
-- `scripts/generate_project.py`: deterministic, dependency-free project regeneration when adding/removing Swift files.
-
-See [architecture](docs/ARCHITECTURE.md), [requirements and effort](docs/REQUIREMENTS.md), [hardware acceptance procedure](docs/DEVICE_TESTING.md), and [verification / limitations](docs/VERIFICATION.md).
-
-### Recognizing the room from more places
-
-ARWorldMap already stores a spatial visual-feature map. A separate visible mesh does not supply viewpoint-independent relocalization on a camera-only phone. The initial scan now checks multiple positions and viewing directions before enabling Finish. Walk the room perimeter where safe, include corners, doors and textured objects from both directions, then look back across the room. Old maps do not acquire missing observations automatically: for a broader scan, create a new room revision and place its drawings there. Existing annotations/maps are not silently rebased or replaced.
-
-Recovery can succeed from different **previously observed** areas, but cannot be guaranteed from any point, a blank wall, changed furniture or different lighting. The direction/position counters are coaching heuristics, not recognition confidence. No new 3D reconstruction pipeline or LiDAR dependency has been added.
-
-### Scan appearance and animation
-
-Detected surface outlines draw in over about 0.6 seconds with a subtle white halo; the targeted surface is mint. Plane updates reuse existing outline entities so they do not constantly restart the reveal. The floating miniature shows shaded thickness on actual observed patches, fades/grows new patches, interpolates refinements and turns with the camera heading. Reduce Motion disables reveal/interpolation. This is a live view of ARKit patches, not classified windows, cabinets or furniture.
-
-The supplied RoomPlan clip was reviewed at three timestamps, not extracted frame by frame. Apple's RoomPlan supplies semantic recognition and its own native scanning visuals on LiDAR devices. SiteAR's camera-only implementation does not claim that detector or promotional recognition quality. The animation revision at commit `88d4de7` passed simulator checks, was installed on the iPhone 12 mini and launched successfully. Physical AR accuracy and recovery quality still need testing.
-
-### Camera-only placement and recovery polish
-
-The app now distinguishes fast movement, insufficient visual features, initialization and relocalization, with specific recovery advice. A detected plane must keep its depth/normal stable for 0.6 seconds before initial placement or Lock view; mint highlighting indicates that placement gate has passed, not guaranteed physical accuracy. Move sideways and inspect real corners before saving. Measured-distance placement remains an explicit fallback.
-
-Tracking loss or interruption ends the active freehand stroke and preserves saved room data. ARKit is asked to keep attempting relocalization while the session is active rather than silently restarting its world origin after a short attempt. Use Keep searching / Scan room again for saved rooms, or Options → Restart scan for an unsaved scan. Frozen-view capture rejects appreciable camera motion; hold steady and try again.
-
-Project search, task-status labels, room work progress and camera-only tips are available in the native lists. Main controls now use consistent English labels. This polish revision is not yet installed on the phone; simulator and mathematical tests do not establish better real-world tracking accuracy or frame rate.
-
-## Course requirements and AI use
-
-The [course audit](docs/COURSE_AUDIT.md) distinguishes implemented features from verified requirements. The current local-only Debug configuration does **not** satisfy mandatory cloud persistence or demonstrate registration/login. Hosted backend setup, policy execution, physical AR acceptance and the lecturer-approved two-person scope remain required.
-
-OpenAI Codex was used extensively to generate implementation, tests and documentation, with focused subagent reviews. Critical corrections included an initially invisible miniature (`88d4de7`, now covered by a pixel test), concurrent frozen-view capture callbacks, and excessive per-edge scan rendering. See [AI use and handover notes](docs/AI_USAGE.md). Each student still needs their own truthful reflection and concrete review example; generated documentation is not evidence of individual understanding or contribution.
-
-Candidate extras include animated scan visualization (Map room), image import (Image tool) and progress summaries (room details), **only if they are outside the lecturer-approved MUST-HAVEs**. Do not count the same feature twice or claim NICE-TO-HAVE points before the MUST-HAVE threshold.
-
-### Long-scan performance limits
-
-Scan visualization now uses at most 24 nearby outlines, with one batched edge mesh plus one halo per outline. Display boundaries have at most 24 samples; the small model uses at most 24 patches with 12 samples each and runs at 10 fps only while animating. Plane updates are coalesced into UI ticks, unchanged geometry is reused, and miniature vertices/depths are cached instead of rebuilt in sort comparisons.
-
-A memory warning or serious thermal pressure reduces this to 12 outlines without halos and a simpler miniature. An accessible leaf icon indicates reduced scan detail; Options explains the state. This changes visualization, not ARKit's world map or saved instruction coordinates. The metadata cache is bounded to 128 patches with 64 samples per patch; raycast placement has its own bounded stability tracker so display selection does not prevent placement.
-
-A simulator stress fixture feeds 600 surfaces and verifies the retained limits and preservation of instructions. This is not an iPhone FPS/memory measurement or proof that the reported crash is fixed. The iPhone was unavailable for crash-log retrieval. For physical verification, scan one room at a time and follow the stress runbook below before claiming hardware acceptance.
-
-### Scan screen styling
-
-The scan screen now uses plain Cancel/Finish controls, one short coaching capsule and a bright floating miniature with a subtle contact shadow. Direction/position counts and map-readiness details are in the lower-left Options sheet, rather than stacked over the camera. The reduced-detail state is a small accessible leaf indicator; its explanation remains in Options. Visual/model budgets are unchanged. This is a presentation refinement toward the supplied RoomPlan reference; semantic furniture/window recognition has not been added.
+OpenAI Codex generated substantial implementation, tests and documentation, including focused subagent work. Earlier corrections included the invisible miniature (`88d4de7`), frozen-view capture races and excessive per-edge rendering. See [AI handover notes](docs/AI_USAGE.md). Each student still needs a truthful individual reflection and concrete review example; generated documentation is not evidence of individual understanding. Count extras only when outside the lecturer-approved MUST-HAVEs.

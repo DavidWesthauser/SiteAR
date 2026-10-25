@@ -1,6 +1,6 @@
 # Architecture and spatial contract
 
-SwiftUI views use a main-actor Store for cloud/local records and errors. Backend owns Supabase authentication and requests; URLSession is injected for tests. ARController owns one ARView/session and the scan → draw transition. Pure value types own spatial validation, scan readiness and alignment calculations. No reconstruction pipeline or realtime layer is involved.
+SwiftUI views use a main-actor Store for cloud/local records and errors. Backend owns Supabase authentication and requests; URLSession is injected for tests. ARController owns one ARView/session and the scan → draw transition. Pure value types own spatial validation, scan readiness and alignment calculations. The current workflow uses unconfigured local Debug storage and file transfer; no backend is connected. No reconstruction pipeline or realtime layer is involved.
 
 ## Coordinates and persistence
 
@@ -33,23 +33,33 @@ Images are imported through PhotosPicker or the file picker, normalized with Ima
 
 The bottom Save bar stays outside the scrollable tools. Work details and measured-distance inputs use native forms in sheets to keep the keyboard away from AR controls. Saved entity collisions allow task selection; scan overlays have no selectable collision geometry.
 
-## Optional recovery
+## Current recovery and compatibility
 
-The initial scan has no required marker or manual references. A collapsed optional marker workflow imports/generates a unique print, calibrates full-image width and records roomFromMarker. Marker fallback deliberately starts a fresh session WITHOUT initialWorldMap:
+Native ARWorldMap recovery is the only active room-localization method. Physical-marker capture, image detection, marker printing and manual reference-point recovery were removed from the current flow. Legacy `marker`, `reference_points` and `reference_notes` JSON fields remain decodable; their presence does not enable a fallback. Existing pure transform math/tests do not imply that a removed recovery UI is active. Measured-distance placement remains explicit and only positions a drawing after room alignment; it cannot localize a saved room.
 
-`sessionFromRoom = sessionFromMarker × inverse(roomFromMarker)`
+Cloud Anchors and Immersal are researched future alternatives. No provider SDK, credentials or hosting/resolving pipeline is integrated. See the [localization decision](decisions/0001-marker-free-shared-localization.md).
 
-This candidate requires explicit confirmation because a physical print may have moved. Its transform is frozen after detection, then world tracking continues without the image staying visible. Older rooms containing two described reference points retain a gravity-aligned manual yaw/translation fallback with explicit confirmation. New rooms require neither dots nor a marker. The two reference points, when present, must have a consistent baseline over 30 cm horizontally.
+## Local storage and file transfer
 
-## Storage and access
+Unconfigured iOS Debug builds start empty and save JSON, real ARWorldMaps and instruction images in Application Support. No backend connection, login or sample project is required for the current test. Local JSON and asset writes are atomic. Deleting the app deletes its local files. Release builds still require backend configuration; use a local Debug installation on each technician phone.
 
-Unconfigured iOS Debug builds start empty and save JSON plus real AR map/marker assets in Application Support. Local mode has no account or sharing, and does not create sample content. Configured builds use authenticated Supabase; Release builds require cloud configuration. Local data does not automatically migrate to the backend.
+Project details exposes **Export project** through the native share sheet (AirDrop/Save to Files). The Projects dashboard exposes **Import project**; opening a `.sitear` file also invokes import. An export includes only the chosen project's rooms, annotations and referenced map/image assets. Inactive legacy marker images are excluded.
 
-Cloud projects have one owner/manager; memberships grant worker access. RLS/grants protect all tables and private Storage. Workers can read assigned projects and call a narrow task-status RPC; manager-only actions manage geometry/maps/access. Foreign keys bind annotations to the exact room coordinate revision. Published maps and coordinate metadata are immutable; migration 002 also protects persisted surface geometry while making manual references optional.
+`ProjectTransferArchive` writes a single file: eight-byte `SITEAR01` magic, a little-endian UInt64 manifest length, UTF-8 Codable manifest and raw asset bytes in sorted path order. Assets stream through FileHandle in chunks of at most 1 MiB with CryptoKit SHA256; there is no base64 asset payload or archive-framework dependency. Limits are 16 MiB manifest, 256 MiB per asset, 1 GiB total assets, 256 rooms, 2,000 annotations and 100,000 geometry points including surfaces/strokes/reference points.
 
-Maps use secure NSKeyedArchiver archives and ARWorldMap-restricted unarchiving. Assets have unique project/room paths and upload before room publication. Failed uploads can leave private orphan assets; cleanup via the Storage API remains operational work. Publication retry is idempotent if a response is lost. Local JSON and asset writes are atomic.
+The codec validates the version, project/room/task associations, unique IDs, spatial validation and exact referenced asset list. Paths must be safe ASCII relative paths under their project UUID/room UUID prefix. Symbolic-link assets, missing files, digest mismatch, truncation, trailing bytes and exceeded limits fail. Export uses a temporary sibling file followed by a move; extraction uses a fresh sibling staging directory and rolls back on failure. Existing output files/directories are never overwritten.
 
-Tokens use Keychain WhenUnlockedThisDeviceOnly; refresh requests share an in-flight task. Sync is explicit, without realtime conflict resolution/revocation. Drafts survive tracking resets while the AR screen remains open; process termination loses unsaved work. Backgrounding a new scan restarts scanning; revisiting a saved room requires recovery. Keep physical-device Device Hub screen viewing OFF during camera testing: Apple blocks camera/mic access while it is active.
+Import validates/extracts before committing a project. It creates new project, room and annotation IDs and rewrites asset paths, while preserving room `coordinate_id`, map anchor identity, poses, vertices, strokes and image dimensions. The imported project is a separate editable copy. Reimporting an edited export creates another copy; it does not merge or synchronize task status with the source. A file's integrity check does not establish sender identity or provide server authorization. There is no live sync or remote revocation.
+
+Maps themselves use secure NSKeyedArchiver archives with ARWorldMap-restricted unarchiving. File transfer preserves their coordinate relationship; successful extraction is not evidence that another phone can physically recover the map. The [README transfer procedure](../README.md#transfer-a-project-to-the-technician-without-a-backend) describes the pending two-phone acceptance.
+
+## Deferred cloud access
+
+Supabase authentication/client, migrations, RLS and private Storage code remain in the repository, but no backend has been connected for this local workflow. The existing design assigns an owner/manager and worker memberships; foreign keys bind annotations to room coordinate revisions, and published map/coordinate metadata is immutable. These are implementation properties awaiting live policy/account acceptance, not protections on an exported file. Local projects are not automatically uploaded.
+
+The existing cloud client uses Keychain WhenUnlockedThisDeviceOnly and a shared in-flight refresh task. Cloud sync has no realtime conflict resolution/revocation. Activating or configuring a backend is deferred; local export/import does not satisfy the course cloud requirement.
+
+Drafts survive tracking resets while the AR screen remains open; process termination loses unsaved work. Backgrounding a new scan restarts scanning; revisiting a saved room requires recovery. Keep physical-device Device Hub screen viewing OFF during camera testing: Apple blocks camera/mic access while it is active.
 
 References: [Apple world maps](https://developer.apple.com/documentation/arkit/arworldmap), [world tracking](https://developer.apple.com/documentation/arkit/arworldtrackingconfiguration), [RoomPlan and LiDAR](https://machinelearning.apple.com/research/roomplan), [Device Hub camera conflicts](https://developer.apple.com/documentation/xcode/interacting-with-your-app-in-device-hub), [Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security).
 
@@ -63,9 +73,9 @@ Legacy arrows retain their shaft and triangular head. Freehand line/area control
 
 ## Scan visualization
 
-RealityKit keeps at most 24 nearby outline anchors, each with one batched edge mesh and one halo, rather than per-edge entities/animations. Boundary traces are updated at the coalesced UI rate and settle after about 0.55 seconds; completed unchanged geometry reuses its mesh. Camera tracking remains ARKit-driven. Metadata is capped at 128 patches with 64 ordered display samples each; rendering uses at most 24 samples. Display selection does not gate actual raycasts: a separate four-target stability cache handles active placement even outside the metadata cache. Degenerate refinements remove old drawables instead of leaving stale outlines.
+RealityKit keeps at most 24 nearby outline anchors, each with one batched edge mesh and one halo, rather than per-edge entities/animations. New outlines use a native RealityKit 0.45-second opacity fade on iOS 18+ (immediate display on iOS 17); no CPU-stepped boundary trace is used. Geometry updates remain coalesced and unchanged geometry reuses its mesh. Camera tracking remains ARKit-driven. Metadata is capped at 128 patches with 64 ordered display samples each; rendering uses at most 24 samples. Display selection does not gate actual raycasts: a separate four-target stability cache handles active placement even outside the metadata cache. Degenerate refinements remove old drawables instead of leaving stale outlines.
 
-The miniature caches world-space geometry for at most 24 patches with 12 samples each, computes trigonometry once per draw and depth once per face, and sorts scalar depths. It runs at 10 Hz while animating and pauses when settled. Reduce Motion bypasses interpolation. ScanVisualization adds thin shaded faces to observed patches only; it does not invent room topology/furniture or alter annotation geometry.
+The miniature caches world-space geometry for at most 24 patches with 12 samples each, computes trigonometry once per draw and depth once per face, and sorts scalar depths. RoomSurfaceModel conservatively consolidates near-coplanar overlapping patches for this miniature only, with bounded candidates and conservative observed-coverage checks. It does not create a full room mesh or infer semantic walls, windows or furniture. Original ARKit raycast patches, map coordinates and annotation poses remain unchanged. While animating, the miniature targets 60 Hz for up to eight surfaces and 30 Hz otherwise. It is static when settled, under reduced-detail pressure or with Reduce Motion. These scheduling targets are not measured phone FPS. ScanVisualization adds thin shaded faces to observed patches only; it does not invent room topology or alter annotation geometry.
 
 A memory-warning observer or serious/critical thermal state switches to a 12-outline/no-halo renderer and reduced-detail miniature. Only visualization resources are released; the ARWorldMap, annotation records and room coordinate contract remain intact. This reduces bounded app-side work but cannot cap ARKit's internal feature-map memory or establish the cause of a device crash without diagnostics.
 

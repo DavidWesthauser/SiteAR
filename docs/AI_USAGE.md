@@ -21,7 +21,7 @@ Handover topics to understand and explain:
 
 1. Room coordinates, session coordinates and why transforms must be multiplied in the right order.
 2. Why loading an ARWorldMap alone does not prove alignment, and why drawings hide on tracking loss.
-3. Marker alignment versus map alignment and explicit fallback confirmation.
+3. Why imported project/room IDs change while coordinate IDs and room-relative poses remain unchanged; why ARWorldMap evidence is still needed before showing drawings. Physical-marker fallback has been removed from the current workflow.
 4. Which data lives in private Storage versus Postgres, and how RLS blocks outsiders.
 5. Local Debug mode versus required cloud persistence; what each automated test actually proves.
 6. Why bounded visualization can reduce workload without improving ARKit's recognition algorithm or changing annotation positions.
