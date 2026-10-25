@@ -39,4 +39,4 @@ A realistic 200-hour plan includes substantial device validation, not just codin
 | Two-device testing, documentation and fixes | 28 |
 | Total | 200 |
 
-Use small reviewable commits by layer. SiteAR has its own Git repository and a private GitHub remote at DavidWesthauser/SiteAR. Unrelated parent-directory projects are not included. Suggested commits: core/test fixtures; Supabase schema/policies; auth/project UI; AR map/localization/editor; acceptance documentation. Review changes before committing.
+Use small reviewable commits by layer. SiteAR has its own Git repository and a public GitHub remote at DavidWesthauser/SiteAR. Unrelated parent-directory projects are not included. Suggested commits: core/test fixtures; Supabase schema/policies; auth/project UI; AR map/localization/editor; acceptance documentation. Review changes before committing.

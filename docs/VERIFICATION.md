@@ -1,4 +1,17 @@
-# Verification record — 2026-10-23
+# Verification record — latest update 2026-10-25
+
+## Current long-scan fix and project polish
+
+- User reported lag followed by a crash during extended room scanning on iPhone 12 mini. Code review identified unbounded per-edge render entities, recursive edge lookups, repeated visibility sweeps and continuous miniature geometry/sort allocations. **No crash/Jetsam report was retrieved:** devicectl reported the phone unavailable, so the actual termination cause remains unconfirmed.
+- Replaced live visualization with bounded batched meshes and a cached, throttled miniature. Memory/thermal fallback releases only visuals. Actual AR maps and annotation coordinates are unchanged. Follow-up review separated active raycast stability from the display cache and fixed stale outlines after invalid geometry.
+- macOS deterministic tests: **46 passed**, zero failures. Includes rendering budgets, reveal/geometry validity, stable placement, capture request ordering, spatial/localization math, real disk persistence and backend fixtures.
+- Simulator renderer/layout suite: **6 passed**, zero failures. The long-scan fixture feeds **600 surfaces with 256 input vertices each** and verifies 128 cached metadata patches, 24 outline anchors/48 drawables normally, and 12 anchors/12 drawables after memory fallback, with instructions retained and off-cache placement stability working.
+- Three interactive local UI flows passed: project rename/relaunch, room rename/delete/relaunch, and scan entry with an explicitly asserted unsupported-AR error. Empty project input is rejected. Auth and configured-cloud UI tests **explicitly skipped**; these are not evidence of live Auth/cloud success.
+- UI polish includes searchable projects, room progress, readable statuses, native tips, English main controls, busy feedback and capture-race prevention. Expanded layout fixtures export 42 screenshots; final reduced-detail/accessibility and empty-project sizing are visually reviewed after correction. Tests do not substitute for VoiceOver or physical AR verification.
+- Current changes have **not been installed on the iPhone**. Earlier installation evidence below applies to commit 88d4de7, not this revision. Hardware performance/accuracy and hosted backend acceptance remain pending.
+- Course requirement audit and AI-use notes are in COURSE_AUDIT.md and AI_USAGE.md. Team size two is user-reported; lecturer approval and individual understanding/contributions are not asserted.
+
+## Earlier records — 2026-10-23
 
 ## Latest iPhone installation
 
