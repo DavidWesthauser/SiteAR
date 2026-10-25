@@ -28,13 +28,31 @@ struct AuthenticationView: View {
 struct ProjectDashboard: View {
     @EnvironmentObject var store: Store
     @State private var creating = false; @State private var name = ""
+    @State private var query=""
     var body: some View {
         NavigationStack {
             List {
-                if store.projects.isEmpty { ContentUnavailableView("Your sites", systemImage: "building.2", description: Text(store.isLocalMode ? "Create your first project, add a room, then map it with your iPhone." : "Create a project or ask a manager to share one with your registered email.")) }
-                ForEach(store.projects) { project in NavigationLink(value: project.id) { Label(project.name, systemImage: "building.2") } }
+                if store.projects.isEmpty {
+                    ContentUnavailableView {
+                        Label("Your work, in place",systemImage:"arkit")
+                    } description: {
+                        Text("Use + to create a project, then scan a room and attach instructions where the work happens.")
+
+                    }
+                } else if !query.isEmpty && !store.projects.contains(where:{$0.name.localizedCaseInsensitiveContains(query)}) {
+                    ContentUnavailableView.search(text:query)
+                }
+                ForEach(store.projects.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { project in
+                    NavigationLink(value:project.id) {
+                        HStack(spacing:14) {
+                            Image(systemName:"building.2").font(.title3).foregroundStyle(.teal).frame(width:46,height:46).background(.teal.opacity(0.1),in:RoundedRectangle(cornerRadius:12))
+                            VStack(alignment:.leading,spacing:4) { Text(project.name).font(.headline);Text("Rooms and instructions").font(.caption).foregroundStyle(.secondary) }
+                        }.padding(.vertical,4)
+                    }
+                }
             }
             .navigationTitle("Projects").accessibilityIdentifier("projects.list")
+            .searchable(text:$query,prompt:"Find a project")
             .navigationDestination(for: UUID.self) { id in
                 if let project = store.projects.first(where: { $0.id == id }) { ProjectDetail(project: project) }
             }
@@ -45,8 +63,8 @@ struct ProjectDashboard: View {
             .alert("New project", isPresented: $creating) {
                 TextField("Project name", text: $name)
                 Button("Create") { let title = name.trimmingCharacters(in: .whitespacesAndNewlines); guard !title.isEmpty else { return }; store.run {
-                    try await store.createProject(name: title)
-                } }
+                    try await store.createProject(name: title);query=""
+                } }.disabled(name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || store.busy)
                 Button("Cancel", role: .cancel) {}
             }
             .task { do { try await store.loadProjects() } catch { store.error = error.localizedDescription } }
@@ -64,9 +82,15 @@ struct ProjectDetail: View {
     var body: some View {
         List {
             Section("Rooms") {
+                if !store.rooms.contains(where:{$0.project_id == project.id}) {
+                    Label("Add a room to start scanning",systemImage:"door.left.hand.open").foregroundStyle(.secondary)
+                }
                 ForEach(store.rooms.filter { $0.project_id == project.id }) { room in
                     NavigationLink { RoomDetail(project: project, initialRoom: room) } label: {
-                        VStack(alignment: .leading) { Text(room.name); Text(room.map_path == nil ? "Needs mapping" : "Spatial map saved").font(.caption).foregroundStyle(.secondary) }
+                        HStack(spacing:12) {
+                            Image(systemName:room.map_path == nil ? "viewfinder" : "cube.transparent").font(.title3).foregroundStyle(room.map_path == nil ? Color.secondary : Color.teal).frame(width:32)
+                            VStack(alignment:.leading,spacing:4) { Text(room.name).font(.headline);Text(room.map_path == nil ? "Ready to scan" : "Room map saved").font(.caption).foregroundStyle(.secondary) }
+                        }.padding(.vertical,4)
                     }
                 }
                 if manager { Button("Add room", systemImage: "plus") { name = ""; addRoom = true }.accessibilityIdentifier("rooms.new") }
@@ -82,12 +106,12 @@ struct ProjectDetail: View {
                     Button("Delete project and all rooms", role: .destructive) { deleting = true }
                 }
             }
-        }.navigationTitle(project.name)
+        }.navigationTitle(project.name).navigationBarTitleDisplayMode(.inline)
         .task { do { try await store.loadRooms(project) } catch { store.error = error.localizedDescription } }
         .refreshable { do { try await store.loadRooms(project) } catch { store.error = error.localizedDescription } }
         .alert("Add room", isPresented: $addRoom) {
             TextField("Room name", text: $name)
-            Button("Add") { let title = name.trimmingCharacters(in: .whitespacesAndNewlines); guard !title.isEmpty else { return }; store.run { try await store.createRoom(in: project, name: title) } }
+            Button("Add") { let title = name.trimmingCharacters(in: .whitespacesAndNewlines); guard !title.isEmpty else { return }; store.run { try await store.createRoom(in: project, name: title) } }.disabled(name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || store.busy)
             Button("Cancel", role: .cancel) {}
         }
         .alert("Rename project", isPresented: $rename) {
@@ -126,6 +150,17 @@ struct RoomDetail: View {
     var manager: Bool { project.owner_id == store.userID }
     var body: some View {
         List {
+            let tasks=store.annotations.filter { $0.room_id == current.id }
+            if !tasks.isEmpty {
+                Section {
+                    VStack(alignment:.leading,spacing:10) {
+                        HStack { Label("Work progress",systemImage:"checkmark.circle").font(.headline);Spacer();Text("\(tasks.filter{$0.status == .completed}.count) / \(tasks.count)").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary) }
+                        ProgressView(value:Double(tasks.filter{$0.status == .completed}.count),total:Double(tasks.count)).tint(.teal)
+                            .accessibilityLabel("Completed tasks")
+                        Text("\(tasks.filter{$0.status == .inProgress}.count) in progress · \(tasks.filter{$0.status == .todo}.count) to do").font(.caption).foregroundStyle(.secondary)
+                    }.padding(.vertical,6)
+                }
+            }
             Section("Spatial room") {
                 if current.map_path != nil {
                     Button("Start AR walkthrough", systemImage: "arkit") { arMode = .walkthrough }
@@ -134,12 +169,13 @@ struct RoomDetail: View {
                 } else if manager { Button("Map room", systemImage: "camera.viewfinder") { arMode = .mapping } }
                 else { Text("Ask the manager to map this room.") }
             }
+            NavigationLink { TrackingTipsView() } label: { Label("Scanning tips",systemImage:"lightbulb") }
             Section("Tasks · available without AR") {
                 ForEach(TaskStatus.allCases, id: \.self) { status in
                     let tasks = store.annotations.filter { $0.room_id == current.id && $0.status == status }
                     if !tasks.isEmpty {
-                        Text(status.rawValue.replacingOccurrences(of: "_", with: " ").capitalized).font(.caption).foregroundStyle(.secondary)
-                        ForEach(tasks) { item in NavigationLink { TaskEditor(item: item, room: current, manager: manager) } label: { VStack(alignment: .leading) { Text(item.title); Text(item.detail).lineLimit(2).font(.caption) } } }
+                        Label(status.label,systemImage:status.symbol).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        ForEach(tasks) { item in NavigationLink { TaskEditor(item: item, room: current, manager: manager) } label: { VStack(alignment:.leading,spacing:4) { Text(item.title).font(.body.weight(.medium));if !item.detail.isEmpty { Text(item.detail).lineLimit(2).font(.caption).foregroundStyle(.secondary) };if item.priority == 2 { Label("High priority",systemImage:"exclamationmark").font(.caption2).foregroundStyle(.orange) } } } }
                     }
                 }
                 if !store.annotations.contains(where: { $0.room_id == current.id }) { Text("No instructions yet").foregroundStyle(.secondary) }
@@ -150,7 +186,7 @@ struct RoomDetail: View {
                     Button("Delete room", role: .destructive) { deleting = true }
                 }
             }
-        }.navigationTitle(current.name)
+        }.navigationTitle(current.name).navigationBarTitleDisplayMode(.inline)
         .task { await refresh() }.refreshable { await refresh() }
         .fullScreenCover(item: $arMode, onDismiss: { Task { await refresh() } }) { mode in ARScreen(room: current, mode: mode, manager: manager).environmentObject(store) }
         .alert("Rename room", isPresented: $rename) {
@@ -184,19 +220,19 @@ struct TaskEditor: View {
     var body: some View {
         Form {
             Section("Instruction") {
-                if manager { TextField("Title", text: $item.title, axis:.vertical).lineLimit(1...3); TextField("Description", text: $item.detail, axis: .vertical); Picker("Priority", selection: $item.priority) { Text("Low").tag(0); Text("Normal").tag(1); Text("High").tag(2) } }
+                if manager { TextField("Title", text: $item.title, axis:.vertical).lineLimit(1...3); TextField("Description", text: $item.detail, axis: .vertical).lineLimit(3...8); Picker("Priority", selection: $item.priority) { Text("Low").tag(0); Text("Normal").tag(1); Text("High").tag(2) } }
                 else { Text(item.title).font(.headline); Text(item.detail) }
             }
-            Picker("Status", selection: $item.status) { ForEach(TaskStatus.allCases, id: \.self) { Text($0.rawValue.replacingOccurrences(of: "_", with: " ").capitalized).tag($0) } }
+            Picker("Status", selection: $item.status) { ForEach(TaskStatus.allCases, id: \.self) { Text($0.label).tag($0) } }
             Button("Save task") { store.run {
                 try await store.saveTask(item, room: room, manager: manager); dismiss()
-            } }.disabled(item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            } }.disabled(store.busy || item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || item.title.count>240)
             if manager, let onReposition { Button("Reposition geometry in AR") { onReposition(); dismiss() }.disabled(item != original) }
             if manager { Button("Delete instruction", role: .destructive) { deleting = true } }
-        }.navigationTitle("Task")
+        }.navigationTitle("Task").navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
         .interactiveDismissDisabled(item != original)
-        .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Back") { if item != original { discarding = true } else { dismiss() } } } }
+        .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Back") { if item != original { discarding = true } else { dismiss() } }.disabled(store.busy) } }
         .confirmationDialog("Discard unsaved task edits?", isPresented: $discarding, titleVisibility: .visible) { Button("Discard changes", role: .destructive) { dismiss() } }
         .confirmationDialog("Delete this spatial instruction?", isPresented: $deleting) {
             Button("Delete", role: .destructive) { store.run { try await store.deleteTask(item, room: room); dismiss() } }
@@ -207,8 +243,9 @@ struct SettingsView: View {
     @EnvironmentObject var store: Store
     var body: some View {
         Form {
-            if store.isLocalMode { Section("On this device") { Text("No account connected"); Text("Your projects, room maps and instructions are saved on this device. Configure Supabase to enable accounts and project sharing.").font(.footnote) } }
+            if store.isLocalMode { Section("On this device") { Text("No account connected"); Text("Your projects, room maps and instructions are saved on this device. Sharing becomes available when cloud accounts are connected.").font(.footnote) } }
             else { Section("Account") { Text(store.backend?.user?.email ?? "Signed in"); Button("Sign out", role: .destructive) { store.run { await store.backend?.signOut(); store.projects = []; store.rooms = []; store.annotations = []; store.signedIn = false } } } }
+            Section { NavigationLink { TrackingTipsView() } label: { Label("Camera-only scanning tips",systemImage:"camera.viewfinder") } }
             Section("SiteAR 1.0") { Text("Spatial work instructions · iOS 17+"); Text("Room maps and marker images are private project assets. Accuracy depends on lighting, texture and fixed reference points. Always check alignment before work.").font(.footnote) }
         }.navigationTitle("Settings")
     }
