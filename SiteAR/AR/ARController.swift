@@ -68,8 +68,7 @@ struct FrozenDrawingFrame {
     private var restoredSentinel = false
     private var interrupted = false
     private var tapRecognizer: UITapGestureRecognizer?
-    private var pendingMapData: Data?
-    private var pendingPublication: Room?
+    private var mapSave = MapSaveTransaction()
 
     init(room: Room, mode: ARMode) {
         self.room = room; self.mode = mode
@@ -125,6 +124,8 @@ struct FrozenDrawingFrame {
         return config
     }
     private func reset(_ config: ARWorldTrackingConfiguration) {
+        mapSave.reset()
+        if mode == .mapping { savedMap = nil }
         cancelViewCapture();frozenFrame = nil
         clearVisuals(); localization.searching(); normalSince = nil; restoredSentinel = false
         clearSurfaces(); scan = ScanProgress(); coverage = ScanCoverage(); lastProgressUpdate = 0;renderingReduced=false
@@ -152,15 +153,16 @@ struct FrozenDrawingFrame {
         if localization.state == .aligned { render(); renderDraft(); refreshSurfaceVisuals(); guidance = "Room recognized. Saved drawings are visible." }
     }
     func reject() { localization.lose(); clearVisuals(); guidance = "Alignment rejected. Retry room recognition; saved tasks remain available." }
-    func stop() { cancelViewCapture();stopped = true; running = false; view.session.pause(); clearVisuals(); clearSurfaces() }
+    func stop() { mapSave.reset();cancelViewCapture();stopped = true; running = false; view.session.pause(); clearVisuals(); clearSurfaces() }
     func suspend() {
+        mapSave.reset()
         updateTracking(.unavailable)
         guard running else { return }; interrupted = true; localization.lose(); trackingNormal = false; clearVisuals(); hideSurfaces(); view.session.pause()
         guidance = mode == .mapping ? "Scan paused. Return to continue scanning." : "Session paused. Return and choose a recovery method."
     }
     func resume() {
         guard interrupted, ready else { return }; interrupted = false
-        if mode == .mapping { pendingMapData = nil; startMapping(); guidance = "Scan restarted after interruption. Look around the room again." }
+        if mode == .mapping { startMapping(); guidance = "Scan restarted after interruption. Look around the room again." }
         else { startMap() }
     }
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -194,7 +196,7 @@ struct FrozenDrawingFrame {
             progress.renderingReduced=renderingReduced
             if mode == .mapping {
                 coverage.observe(position:frame.camera.transform.columns.3.xyz,forward:-frame.camera.transform.columns.2.xyz,
-                                 reliable:normal && (frame.worldMappingStatus == .mapped || frame.worldMappingStatus == .extending))
+                                 reliable:normal && progress.hasUsefulFeatures && (frame.worldMappingStatus == .mapped || frame.worldMappingStatus == .extending),at:frame.timestamp)
             }
             progress.cameraYaw=atan2(-frame.camera.transform.columns.2.x,-frame.camera.transform.columns.2.z)
             progress.coverage=coverage
@@ -204,6 +206,7 @@ struct FrozenDrawingFrame {
         if normal { if normalSince == nil { normalSince = frame.timestamp } } else { normalSince = nil }
         if mode == .mapping {
             if !normal { setGuidance(issue.instruction) }
+            else if !scan.hasUsefulFeatures { setGuidance("Look at a textured corner or door frame and pause briefly. More visible detail is needed for this view.") }
             else if !coverage.ready { setGuidance(coverage.instruction) }
             else if !mapped { setGuidance("Slowly revisit captured details so ARKit can connect the room map.") }
             else { setGuidance(scan.canFinish ? "Room map ready. Finish scanning to start drawing." : "Keep moving gently until surfaces are detected and tracking is stable.") }
@@ -228,7 +231,14 @@ struct FrozenDrawingFrame {
         if trackingIssue != issue { trackingIssue=issue }
         let normal=issue == .none
         if trackingNormal != normal { trackingNormal=normal;if normal { refreshSurfaceVisuals() } else { hideSurfaces() } }
-        if !normal { cancelViewCapture();if lineDraft.isDrawing { endStroke() };if frozenFrame != nil { frozenFrame=nil };if targetReady { targetReady=false } }
+        if !normal {
+            normalSince=nil;coverage.interrupt()
+            if scan.normalTracking { scan.normalTracking=false;scan.stableSeconds=0;scan.coverage=coverage }
+            surfaceStability.removeAll(keepingCapacity:true)
+            placementStability.removeAll(keepingCapacity:true);placementTimes.removeAll(keepingCapacity:true)
+            targetedSurface=nil
+            cancelViewCapture();if lineDraft.isDrawing { endStroke() };if frozenFrame != nil { frozenFrame=nil };if targetReady { targetReady=false }
+        }
     }
     func session(_ session: ARSession, didAdd anchors: [ARAnchor]) { process(anchors) }
     func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) { process(anchors) }
@@ -242,18 +252,22 @@ struct FrozenDrawingFrame {
     }
     func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
         for anchor in anchors {
-            detectedSurfaces.removeValue(forKey: anchor.identifier)
-            surfaceStability.removeValue(forKey:anchor.identifier)
-            placementStability.removeValue(forKey:anchor.identifier);placementTimes.removeValue(forKey:anchor.identifier)
-            renderedPatches.removeValue(forKey:anchor.identifier)
-            if let entity = surfaceEntities.removeValue(forKey: anchor.identifier) { view.scene.removeAnchor(entity) }
+            removeSurface(id:anchor.identifier)
+            if anchor.name == sentinelName {
+                restoredSentinel=false
+                if mode != .mapping {
+                    localization.searching();normalSince=nil;startedAt=Date()
+                    clearVisuals();hideSurfaces()
+                    setGuidance("The saved room anchor was lost. Look at previously scanned details to recover alignment.")
+                }
+            }
         }
     }
     // Preserve the current origin during transient tracking loss. Recovery/restart stays explicit.
     func sessionShouldAttemptRelocalization(_ session:ARSession) -> Bool { running && !stopped }
-    func sessionWasInterrupted(_ session: ARSession) { updateTracking(.relocalizing); interrupted = true; localization.lose(); trackingNormal = false; clearVisuals(); hideSurfaces(); guidance = "AR interrupted. Recover alignment after returning." }
+    func sessionWasInterrupted(_ session: ARSession) { mapSave.reset();updateTracking(.relocalizing); interrupted = true; localization.lose(); trackingNormal = false; clearVisuals(); hideSurfaces(); guidance = "AR interrupted. Recover alignment after returning." }
     func sessionInterruptionEnded(_ session: ARSession) { resume() }
-    func session(_ session: ARSession, didFailWithError error: Error) { updateTracking(.unavailable); localization.fail(); clearVisuals(); hideSurfaces(); self.error = "AR session failed: \(error.localizedDescription). Close AR and reopen the room." }
+    func session(_ session: ARSession, didFailWithError error: Error) { mapSave.reset();updateTracking(.unavailable); localization.fail(); clearVisuals(); hideSurfaces(); self.error = "AR session failed: \(error.localizedDescription). Close AR and reopen the room." }
 
     private func hit(_ point: CGPoint) -> simd_float4x4? {
         guard trackingNormal else { return nil }
@@ -452,15 +466,18 @@ struct FrozenDrawingFrame {
         }
     }
     func saveMap(store: Store) async throws -> Room {
-        if let pendingPublication {
-            try await store.publishRoom(pendingPublication)
-            return pendingPublication // Idempotent retry if a previous PATCH succeeded but its response was lost.
+        let generation = mapSave.generation
+        guard mode == .mapping, running, !stopped, !interrupted, trackingNormal else {
+            throw AppError.message("The scan is paused. Recover tracking before saving the room.")
         }
-        guard mode == .mapping, scan.canFinish else {
-            throw AppError.message("Capture all four directions from at least three positions. Wait for stable tracking, detected surfaces and a ready room map.")
+        if let publication = mapSave.publication {
+            try await store.publishRoom(publication)
+            return try finishMapPublication(publication,generation:generation)
         }
-        // Keep an encoded snapshot for retry after a network failure; uploads never overwrite a live asset.
-        if pendingMapData == nil {
+        guard scan.canFinish else {
+            throw AppError.message("Pause at textured views in all four directions from at least three positions. Wait for stable tracking, detected surfaces and a ready room map.")
+        }
+        if mapSave.data == nil {
             let map: ARWorldMap = try await withCheckedThrowingContinuation { continuation in
                 view.session.getCurrentWorldMap { map, error in
                     if let error { continuation.resume(throwing: error) }
@@ -468,20 +485,35 @@ struct FrozenDrawingFrame {
                     else { continuation.resume(throwing: AppError.message("ARKit could not produce a map.")) }
                 }
             }
-            savedMap = map
+            try mapSave.validate(generation)
             guard map.anchors.contains(where: { $0.name == sentinelName }) else { throw AppError.message("Room anchor missing from map. Restart mapping.") }
-            pendingMapData = try NSKeyedArchiver.archivedData(withRootObject: map, requiringSecureCoding: true)
+            let data = try NSKeyedArchiver.archivedData(withRootObject: map, requiringSecureCoding: true)
+            try mapSave.capture(data, generation: generation)
+            savedMap = map
         }
-        guard trackingNormal, mapped, let data = pendingMapData else { throw AppError.message("Tracking changed while saving. Recheck the room and retry.") }
+        guard trackingNormal, mapped, let data = mapSave.data else { throw AppError.message("Tracking changed while saving. Recheck the room and retry.") }
         let root = "\(room.project_id.uuidString.lowercased())/\(room.id.uuidString.lowercased())/\(UUID().uuidString.lowercased())"
         let mapPath = root + ".worldmap"
-        try await store.uploadAsset(path: mapPath, data: data, type: "application/octet-stream")
         var updated = room; updated.map_path = mapPath
         updated.surfaces = detectedSurfaces.values.sorted { $0.id.uuidString < $1.id.uuidString }
-        // Publish metadata only after both assets exist. Existing room maps are immutable.
-        pendingPublication = updated
+        try await store.uploadAsset(path: mapPath, data: data, type: "application/octet-stream")
+        try mapSave.validate(generation)
+        // An interrupted/restarted session must never publish or reuse its predecessor's snapshot.
+        try mapSave.stage(updated, generation: generation)
         try await store.publishRoom(updated)
-        return updated
+        return try finishMapPublication(updated,generation:generation)
+    }
+
+    private func finishMapPublication(_ published:Room,generation:UUID) throws -> Room {
+        do { try mapSave.validateCompletion(generation) }
+        catch {
+            // Persistence succeeded, but identity alignment belongs to the previous AR session.
+            room=published;mode = .walkthrough;running=false;ready=false;savedMap=nil
+            cancelViewCapture();view.session.pause();localization.lose();clearVisuals();clearSurfaces()
+            guidance=error.localizedDescription
+            throw error
+        }
+        return published
     }
 
     /// Continue drawing immediately in the same verified manager session, without relocalizing.
@@ -596,19 +628,33 @@ extension ARController {
     }
     private func updateSurface(_ plane: ARPlaneAnchor) {
         let boundary=ScanRenderingBudget.displayBoundary(plane.geometry.boundaryVertices.map(Point3.init),maximum:64)
-        guard boundary.count>=3,let pose=try? Pose(plane.transform) else { return }
+        guard boundary.count>=3,let pose=try? Pose(plane.transform) else { removeSurface(id:plane.identifier);return }
         let patch=SurfacePatch(id:plane.identifier,pose:pose,vertices:boundary,vertical:plane.alignment == .vertical)
         updateSurfacePatch(patch)
-        guard detectedSurfaces[patch.id] != nil else { return }
+        guard trackingNormal,detectedSurfaces[patch.id] != nil else { return }
         var stability=surfaceStability[patch.id] ?? SurfaceStability()
         stability.observe(pose,at:view.session.currentFrame?.timestamp ?? ProcessInfo.processInfo.systemUptime)
         surfaceStability[patch.id]=stability
+    }
+    private func removeSurface(id:UUID) {
+        detectedSurfaces.removeValue(forKey:id);surfaceStability.removeValue(forKey:id)
+        placementStability.removeValue(forKey:id);placementTimes.removeValue(forKey:id)
+        renderedPatches.removeValue(forKey:id)
+        if let root=surfaceEntities.removeValue(forKey:id) {
+            root.isEnabled=false
+            for child in Array(root.children) { child.removeFromParent() }
+            view.scene.removeAnchor(root)
+        }
+        if targetedSurface == id { targetedSurface=nil;targetReady=false }
+        if scan.surfaces.contains(where:{$0.id == id}) {
+            scan.surfaces.removeAll(where:{$0.id == id});scan.observedSurfaceCount=detectedSurfaces.count
+        }
     }
     /// Coalesce AR callbacks into a bounded metadata cache. Rendering occurs once per UI tick.
     func updateSurfacePatch(_ input:SurfacePatch) {
         var patch=input
         patch.vertices=ScanRenderingBudget.displayBoundary(input.vertices,maximum:64)
-        guard patch.vertices.count>=3 else { return }
+        guard patch.vertices.count>=3 else { removeSurface(id:patch.id);return }
         if detectedSurfaces[patch.id] == nil,detectedSurfaces.count>=128 {
             let camera=view.session.currentFrame?.camera.transform.columns.3.xyz ?? .zero
             func distance(_ item:SurfacePatch) -> Float { simd_distance_squared(item.pose.matrix.columns.3.xyz,camera) }

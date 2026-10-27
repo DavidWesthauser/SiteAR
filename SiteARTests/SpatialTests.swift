@@ -68,18 +68,31 @@ final class SpatialTests: XCTestCase {
         var coverage=ScanCoverage()
         for i in 0..<4 {
             let angle=Float(i)*Float.pi/2+0.2
-            coverage.observe(position:.zero,forward:SIMD3(sin(angle),0,cos(angle)),reliable:true)
+            for offset in [0.0, 0.75] {
+                coverage.observe(position:.zero,forward:SIMD3(sin(angle),0,cos(angle)),reliable:true,at:Double(i) + offset)
+            }
         }
         XCTAssertEqual(coverage.headings.count,4); XCTAssertEqual(coverage.positions.count,1)
-        XCTAssertFalse(coverage.ready) // Spinning on the spot is insufficient.
-        coverage.observe(position:SIMD3(0.2,0,0),forward:SIMD3(1,0,0),reliable:true)
+        XCTAssertFalse(coverage.ready) // Qualified turns on the spot are still insufficient.
+        for time in [4.0, 4.75] {
+            coverage.observe(position:SIMD3(0.2,0,0),forward:SIMD3(1,0,0),reliable:true,at:time)
+        }
         XCTAssertEqual(coverage.positions.count,1)
-        coverage.observe(position:SIMD3(1,0,0),forward:SIMD3(1,0,0),reliable:false)
+        coverage.observe(position:SIMD3(1,0,0),forward:SIMD3(1,0,0),reliable:false,at:5)
         XCTAssertEqual(coverage.positions.count,1)
-        for x:Float in [0.6,1.2] { coverage.observe(position:SIMD3(x,0,0),forward:SIMD3(1,0,0),reliable:true) }
+        for (i,x) in [Float(0.6),1.2].enumerated() {
+            for offset in [0.0, 0.75] {
+                coverage.observe(position:SIMD3(x,0,0),forward:SIMD3(1,0,0),reliable:true,at:6 + Double(i) + offset)
+            }
+        }
         XCTAssertTrue(coverage.ready)
         var oneDirection=ScanCoverage()
-        for x:Float in [0,0.6,1.2] { oneDirection.observe(position:SIMD3(x,0,0),forward:SIMD3(0,0,-1),reliable:true) }
+        for (i,x) in [Float(0),0.6,1.2].enumerated() {
+            for offset in [0.0, 0.75] {
+                oneDirection.observe(position:SIMD3(x,0,0),forward:SIMD3(0,0,-1),reliable:true,at:Double(i) + offset)
+            }
+        }
+        XCTAssertEqual(oneDirection.positions.count,3)
         XCTAssertFalse(oneDirection.ready)
     }
     func testMeasuredDistanceUsesOffCentreScreenDirection() throws {
@@ -200,14 +213,21 @@ extension SpatialTests {
     func testScanReadinessRequiresRealSurfacesAndStableTracking() throws {
         var progress = ScanProgress()
         progress.normalTracking = true; progress.mapReady = true; progress.stableSeconds = 3
+        progress.featureCount = ScanProgress.minimumFeatureCount
         XCTAssertFalse(progress.canFinish)
         let surface = SurfacePatch(id:UUID(),pose:.identity,vertices:[Point3(.zero),Point3(SIMD3(1,0,0)),Point3(SIMD3(1,0,1))],vertical:false)
         try surface.validate(); progress.surfaces = [surface]
         for i in 0..<4 {
             let angle=Float(i)*Float.pi/2+0.2
-            progress.coverage.observe(position:SIMD3(Float(i)*0.6,0,0),forward:SIMD3(sin(angle),0,cos(angle)),reliable:true)
+            for offset in [0.0, 0.75] {
+                progress.coverage.observe(position:SIMD3(Float(i)*0.6,0,0),forward:SIMD3(sin(angle),0,cos(angle)),reliable:true,at:Double(i) + offset)
+            }
         }
         XCTAssertTrue(progress.canFinish); XCTAssertEqual(progress.stage,3); XCTAssertEqual(progress.horizontalCount,1)
+        progress.featureCount = 19
+        XCTAssertFalse(progress.hasUsefulFeatures); XCTAssertFalse(progress.canFinish)
+        progress.featureCount = 20
+        XCTAssertTrue(progress.hasUsefulFeatures); XCTAssertTrue(progress.canFinish)
         progress.normalTracking = false; XCTAssertFalse(progress.canFinish); XCTAssertEqual(progress.stage,0)
         progress.normalTracking = true; progress.mapReady = false; XCTAssertFalse(progress.canFinish)
     }

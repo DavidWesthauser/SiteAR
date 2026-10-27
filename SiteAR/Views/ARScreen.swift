@@ -175,6 +175,7 @@ struct ARScreen: View {
         if !ar.ready { return "Starting camera" }
         if ar.ready,ar.trackingIssue != .none { return ar.trackingIssue.title }
         if !ar.scan.normalTracking { return "Move slowly to begin" }
+        if !ar.scan.hasUsefulFeatures { return "Find a textured corner" }
         if ar.scan.coverage.positions.count<3 { return "Walk around the room" }
         if ar.scan.coverage.headings.count<4 { return "Look in every direction" }
         return "Revisit a familiar corner"
@@ -200,6 +201,22 @@ struct ARScreen: View {
                         .padding(.horizontal,16).padding(.vertical,10)
                         .background(.ultraThinMaterial,in:Capsule()).frame(maxWidth:320)
                         .accessibilityLabel(ar.guidance)
+                    HStack(spacing:6) {
+                        ForEach(0..<4,id: \.self) { heading in
+                            let progress=ar.scan.coverage.directionProgress[heading]
+                            GeometryReader { geometry in
+                                Capsule().fill(.white.opacity(0.25))
+                                    .overlay(alignment:.leading) {
+                                        Capsule().fill(.mint).frame(width:geometry.size.width*progress)
+                                    }
+                            }.frame(height:4)
+                                .accessibilityLabel("View \(heading+1): \(progress >= 1 ? "recorded" : "pending")")
+                        }
+                    }.frame(maxWidth:180).accessibilityElement(children:.combine)
+                    if ar.scan.normalTracking && ar.scan.hasUsefulFeatures {
+                        Text("Pause briefly at each view · \(min(ar.scan.coverage.positions.count,3))/3 positions")
+                            .font(.caption).shadow(color:.black,radius:2).multilineTextAlignment(.center)
+                    }
                 }
                 GeometryReader { proxy in
                     Color.clear.preference(key:CameraAimPreference.self,value:CGPoint(x:proxy.frame(in:.global).midX,y:proxy.frame(in:.global).midY))
@@ -221,8 +238,9 @@ struct ARScreen: View {
                         LabeledContent("Room map",value:ar.scan.mapReady ? "Ready" : "Building")
                         LabeledContent("Directions",value:"\(ar.scan.coverage.headings.count) of 4")
                         LabeledContent("Positions",value:"\(min(ar.scan.coverage.positions.count,3)) of 3")
+                        LabeledContent("Visible detail",value:ar.scan.hasUsefulFeatures ? "Enough for this view" : "Find more texture")
                         LabeledContent("Surface outlines",value:"\(ar.scan.surfaces.count) nearby")
-                        Text("The miniature shows detected patches. Check them against physical edges; it is not proof of complete room coverage.").font(.footnote).foregroundStyle(.secondary)
+                        Text("Pause for about a second at each textured view. Each bar records a viewing direction, not a completed wall. Visit three positions at least 0.5 m apart. The miniature shows detected patches, not proof of complete room coverage.").font(.footnote).foregroundStyle(.secondary)
                     }
                     Section("Tracking") {
                         if ar.renderingReduced { Text("Scan detail was reduced to limit rendering work. Finish this room before scanning another. Your map and drawings are retained.").font(.footnote) }
@@ -329,7 +347,8 @@ struct ARScreen: View {
         Task {
             defer { saving = false }
             do { let updated = try await ar.saveMap(store: store); ar.beginEditing(updated) }
-            catch { ar.error = "Room not saved. Keep this session open and retry. \(error.localizedDescription)" }
+            catch MapSaveTransaction.Failure.savedSessionChanged { ar.error = MapSaveTransaction.Failure.savedSessionChanged.localizedDescription }
+            catch { ar.error = "Couldn't finish saving. Keep this session open to retry, or reopen the room to check its saved state. \(error.localizedDescription)" }
         }
     }
     private func reload() async {

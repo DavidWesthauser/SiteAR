@@ -31,6 +31,12 @@ public enum ScanRenderingBudget {
             distinct.removeLast()
         }
         guard distinct.count >= 3 else { return [] }
+        var area = SIMD3<Float>.zero
+        for index in 1..<(distinct.count - 1) {
+            area += simd_cross(distinct[index].vector - distinct[0].vector,
+                               distinct[index + 1].vector - distinct[0].vector)
+        }
+        guard finite(area), simd_length_squared(area) > 0.000000000001 else { return [] }
         guard distinct.count > limit else { return distinct }
         return (0..<limit).map { distinct[$0 * distinct.count / limit] }
     }

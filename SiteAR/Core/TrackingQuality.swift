@@ -26,6 +26,7 @@ public enum TrackingIssue: String, Equatable, Sendable {
 }
 
 /// Checks whether a plane's depth and normal have settled, not its physical accuracy.
+/// Evidence must stay fresh: observations more than one second apart restart settling.
 public struct SurfaceStability: Sendable {
     private var reference:Pose?
     private var since:TimeInterval?
@@ -34,7 +35,9 @@ public struct SurfaceStability: Sendable {
     public mutating func observe(_ pose:Pose,at time:TimeInterval) {
         guard time.isFinite else { self=SurfaceStability();return }
         defer { self.lastTime=time }
-        guard let previous=reference, let lastTime, time>=lastTime else { reference=pose;since=time;return }
+        guard let previous=reference, let lastTime, time>=lastTime, time-lastTime<=1.0 else {
+            reference=pose;since=time;return
+        }
         let normal=previous.matrix.columns.1.xyz,newNormal=pose.matrix.columns.1.xyz
         let depthChange=abs(simd_dot(pose.matrix.columns.3.xyz-previous.matrix.columns.3.xyz,normal))
         let orientation=abs(simd_dot(normal,newNormal))
@@ -42,7 +45,7 @@ public struct SurfaceStability: Sendable {
         if depthChange>0.02 || orientation<cos(Float.pi/60) { reference=pose;since=time }
     }
     public func isReady(at time:TimeInterval) -> Bool {
-        guard let since,let lastTime,time.isFinite,time>=lastTime else { return false }
+        guard let since,let lastTime,time.isFinite,time>=lastTime,time-lastTime<=1.0 else { return false }
         return time-since>=0.6
     }
 }

@@ -29,11 +29,20 @@ import RealityKit
 
         for i in 0..<4 {
             let angle=Float(i)*Float.pi/2+0.2
-            ready.coverage.observe(position:SIMD3(Float(i)*0.6,0,0),forward:SIMD3(sin(angle),0,cos(angle)),reliable:true)
+            for offset in [0.0, 0.75] {
+                ready.coverage.observe(position:SIMD3(Float(i)*0.6,0,0),forward:SIMD3(sin(angle),0,cos(angle)),reliable:true,at:Double(i) + offset)
+            }
         }
-        let configurations:[(String,ARMode)] = [("scan-start",.mapping),("scan-ready",.mapping),("scan-reduced",.mapping),("recognizing",.walkthrough),("tracking-lost",.editing),("draw-editor",.editing),("area-editor",.editing),("image-empty",.editing),("image-loaded",.editing),("worker-aligned",.walkthrough),("recovery",.walkthrough),("motion-limited",.editing),("features-limited",.editing)]
+        let configurations:[(String,ARMode)] = [("scan-start",.mapping),("scan-partial",.mapping),("scan-ready",.mapping),("scan-reduced",.mapping),("recognizing",.walkthrough),("tracking-lost",.editing),("draw-editor",.editing),("area-editor",.editing),("image-empty",.editing),("image-loaded",.editing),("worker-aligned",.walkthrough),("recovery",.walkthrough),("motion-limited",.editing),("features-limited",.editing)]
         for (name,mode) in configurations {
             let ar=ARController(room:room,mode:mode)
+            if name=="scan-partial" {
+                var partial=ready;partial.coverage=ScanCoverage()
+                partial.coverage.observe(position:.zero,forward:SIMD3(0,0,1),reliable:true,at:0)
+                partial.coverage.observe(position:.zero,forward:SIMD3(0,0,1),reliable:true,at:0.375)
+                ar.ready=true;ar.updateTracking(.none);ar.scan=partial;ar.mapped=true
+                ar.guidance=partial.coverage.instruction
+            }
             if name=="scan-ready" || name=="scan-reduced" {
                 ar.scan=ready; ar.trackingNormal=true; ar.mapped=true
                 if name=="scan-reduced" { ar.scan.renderingReduced=true;ar.scan.observedSurfaceCount=128 }
@@ -54,7 +63,7 @@ import RealityKit
             for size in [CGSize(width:375,height:667),CGSize(width:375,height:812)] {
                 try await snapshot(AnyView(ARScreen(controller:ar,manager:mode != .walkthrough)),store:store,name:"\(name)-\(Int(size.height))",size:size)
             }
-            if ["draw-editor","image-loaded","scan-ready","scan-reduced"].contains(name) {
+            if ["draw-editor","image-loaded","scan-partial","scan-ready","scan-reduced"].contains(name) {
                 try await snapshot(AnyView(ARScreen(controller:ar,manager:true).environment(\.dynamicTypeSize,.accessibility1)),store:store,name:"\(name)-large-text",size:CGSize(width:375,height:667))
             }
             ar.stop()
@@ -137,6 +146,35 @@ import RealityKit
         }
         XCTAssertGreaterThan(count,1000,"Observed geometry must be visible before any animation tick")
     }
+    func testLostTrackingAndInvalidRefinementDiscardPlacementEvidence() throws {
+        let room=Room(project_id:UUID(),name:"Placement recovery fixture")
+        let ar=ARController(room:room,mode:.mapping)
+        ar.updateTracking(.none)
+        var patch=SurfacePatch(id:UUID(),pose:.identity,vertices:[Point3(.zero),Point3(SIMD3(1,0,0)),Point3(SIMD3(1,0,1))],vertical:false)
+        ar.updateSurfacePatch(patch);ar.renderScanSurfaces();ar.scan.surfaces=[patch]
+        XCTAssertFalse(ar.placementSurfaceIsReady(id:patch.id,pose:.identity,at:0))
+        XCTAssertTrue(ar.placementSurfaceIsReady(id:patch.id,pose:.identity,at:0.7))
+        ar.updateTracking(.excessiveMotion);ar.updateTracking(.none)
+        XCTAssertFalse(ar.placementSurfaceIsReady(id:patch.id,pose:.identity,at:0.8))
+        XCTAssertTrue(ar.placementSurfaceIsReady(id:patch.id,pose:.identity,at:1.5))
+        patch.vertices=[];ar.updateSurfacePatch(patch)
+        XCTAssertEqual(ar.cachedSurfaceCount,0);XCTAssertTrue(ar.view.scene.anchors.isEmpty)
+        XCTAssertTrue(ar.scan.surfaces.isEmpty)
+        XCTAssertFalse(ar.placementSurfaceIsReady(id:patch.id,pose:.identity,at:1.6))
+        ar.stop()
+    }
+    func testRemovingSavedRoomAnchorHidesInstructions() {
+        let room=Room(project_id:UUID(),name:"Anchor loss fixture")
+        let ar=ARController(room:room,mode:.walkthrough)
+        ar.updateTracking(.none)
+        ar.annotations=[Annotation(room:room,kind:.text,pose:.identity,title:"Wall instruction",detail:"")]
+        ar.localization.propose(.identity,method:.map);ar.confirm()
+        XCTAssertFalse(ar.view.scene.anchors.isEmpty)
+        let sentinel=ARAnchor(name:"SiteAR.room.\(room.coordinate_id.uuidString)",transform:matrix_identity_float4x4)
+        ar.session(ar.view.session,didRemove:[sentinel])
+        XCTAssertNil(ar.localization.roomToSession);XCTAssertTrue(ar.view.scene.anchors.isEmpty)
+        ar.stop()
+    }
     func testSurfaceOutlineKeepsAnchorAcrossRefinements() async throws {
         let room=Room(project_id:UUID(),name:"Test-only scan renderer")
         let ar=ARController(room:room,mode:.mapping);ar.trackingNormal=true
@@ -202,10 +240,21 @@ import RealityKit
         window.frame=CGRect(origin:.zero,size:size); window.rootViewController=host; window.makeKeyAndVisible()
         defer { window.isHidden=true; window.rootViewController=nil }
         host.view.frame=window.bounds; host.view.setNeedsLayout(); host.view.layoutIfNeeded()
-        try await Task.sleep(for:.milliseconds(name.hasPrefix("scan-ready") ? 650 : 180))
+        try await Task.sleep(for:.milliseconds(name.hasPrefix("scan-") ? 650 : 180))
         XCTAssertFalse(host.view.hasAmbiguousLayout,name)
         XCTAssertEqual(host.view.bounds.width,size.width,accuracy:1,name)
         let image=UIGraphicsImageRenderer(size:size).image { _ in host.view.drawHierarchy(in:CGRect(origin:.zero,size:size),afterScreenUpdates:true) }
+        if name.hasPrefix("scan-partial"),let cg=image.cgImage {
+            let width=Int(size.width),height=Int(size.height)
+            var bytes=[UInt8](repeating:0,count:width*height*4)
+            let visible=bytes.withUnsafeMutableBytes { buffer -> Int in
+                guard let context=CGContext(data:buffer.baseAddress,width:width,height:height,bitsPerComponent:8,bytesPerRow:width*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0 }
+                context.draw(cg,in:CGRect(origin:.zero,size:size))
+                let pixels=buffer.bindMemory(to:UInt8.self)
+                return stride(from:(height/2)*width*4,to:pixels.count,by:4).filter { pixels[$0]>120 && pixels[$0+1]>120 && pixels[$0+2]>120 }.count
+            }
+            XCTAssertGreaterThan(visible,500,"Partial-scan miniature and lower controls must stay visible: \(name)")
+        }
         let attachment=XCTAttachment(image:image); attachment.name=name; attachment.lifetime = .keepAlways; add(attachment)
     }
 }

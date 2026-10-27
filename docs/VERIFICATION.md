@@ -1,4 +1,12 @@
-# Verification record — latest update 2026-10-25
+# Verification record — latest update 2026-10-27
+
+## Capture quality and coordinate-origin fixes — 27 October 2026
+
+- Code review identified three reproducible mechanisms: instantaneous direction/position credit, stale plane-settling evidence after observation gaps/tracking loss, and map-save retry state surviving an AR coordinate-origin reset. Invalid surface updates could also retain old outlines/metadata. These mechanisms are fixed; this does not establish the cause of the earlier phone crash.
+- Scan progress now requires qualified steady observations and provides four small direction bars plus a position hint. The feature-count threshold is an explicit, uncalibrated coaching heuristic. Mapping is still ARKit plane/feature tracking, without new reconstruction, semantic room recognition, a backend connection or fixed markers.
+- Portable suite: **82 passed** (71 Core/transfer/quality tests and 11 service/store tests), zero failures. New tests cover view dwell, unreliable observations, clock gaps, bounded positions, stability expiry, cumulative plane drift, reset/callback ordering and successful late publication versus an interrupted unsaved capture.
+- Simulator: **8 AR/layout tests passed**, including placement reset, invalid refinement cleanup, lost-room-anchor hiding, long-scan rendering limits and drawing/image preservation. The scan-entry workflow with the explicit unsupported-AR error passed. The final map-save suite passed **5 tests** after the late-publication correction. The expanded layout fixture captures 45 states, including partial progress at compact/large text sizes; the scan progress display was visually reviewed. These are simulated events and deterministic state fixtures, not real room scans.
+- The latest code is not installed on the physical phone. Recognition success rates, surface accuracy, scan time, FPS, thermal/memory behavior and the new heuristics require physical camera-only testing; use DEVICE_TESTING.md. Existing maps are not retroactively improved by the new capture guidance.
 
 ## Current marker-free scan and portable projects
 

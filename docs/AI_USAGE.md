@@ -8,6 +8,8 @@ Concrete examples of generated code that needed correction:
 - Commit `ece3928`: the frozen-view workflow allowed concurrent snapshot requests. Focused review identified a stale callback that could clear a valid drawing plane. `ViewCaptureRequest` now rejects duplicate/stale requests and cancels them on reset, resume, stop and tracking loss; a deterministic test covers the ordering.
 - Commit `ece3928`: a long-scan review found per-edge render entities, repeated searches and continuous unbounded miniature work. Display geometry is now sampled/bounded and batched, with pressure-driven detail reduction. Stress tests do not prove that the user's device crash is fixed.
 
+- 27 October 2026: focused review found that pending map bytes/publication survived a new AR coordinate origin. The fix adds MapSaveTransaction generation checks around asynchronous results, clears retry state on interruption/reset and distinguishes an already-saved late response from an unsaved failure. Deterministic tests cover the callback ordering; physical room accuracy is still unverified.
+
 These are factual development examples, **not claims that either student personally performed the review or understands the code**. Both students' individual reflections are pending and must be written from their actual experience. Do not invent contribution histories, reviews or earlier commits.
 
 For each student, record before submission:

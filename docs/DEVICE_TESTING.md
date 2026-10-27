@@ -85,3 +85,12 @@ Do not mark physical acceptance complete until same-phone persistence and two-ph
 ## Minimal scan overlay check
 
 Check Cancel/Finish over bright and dark real camera scenes, including disabled Finish. The coaching capsule should stay brief, the miniature should float near the bottom and the lower-left control should open Scan progress, tracking guidance and recovery options. Verify counts remain accessible in that sheet, the reduced-detail leaf has a VoiceOver label, and camera-denied/unsupported states do not incorrectly ask the user to keep moving. Repeat with large text; keep the renderer budgets unchanged.
+
+
+## Capture and lifecycle regression checks (27 October 2026; physical pending)
+
+- Sweep quickly through all directions: bars must not immediately complete. Pause at a textured view for about a second, move at least 0.5 m, pause again and capture all four directions. Check the guidance on blank/reflective surfaces. Twenty raw feature points is a tunable observation heuristic, not a measured accuracy threshold.
+- After a placement target settles, cover the lens or move too quickly. Recover tracking and alignment: the target must settle afresh, rather than reuse the old mint state.
+- Force a disposable map-upload failure, then restart scanning and save again. Compare the restored instruction against the newly scanned room; no cached old-origin map may be reused. Background during map capture/upload and repeat. Simulator domain fixtures cover invalidation without pretending to scan a room.
+- For a future configured backend test, interrupt while publication is in flight. If the server save succeeds, the app must report that the room was saved and require reopening/recognition, rather than retrying a different map against an immutable room. If the response is lost, reopen and refresh the room to reconcile its state.
+- Check the four small direction bars and position hint over bright/dark camera scenes at large text sizes. Bars describe qualified views, not scanned wall percentages. Record time to save, recovery time and physical placement error before claiming better recognition.
