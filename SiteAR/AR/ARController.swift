@@ -28,6 +28,12 @@ struct FrozenDrawingFrame {
     private(set) var imageData: Data?
     private var draftImageTexture: TextureResource?
     private var imageTextures: [String:TextureResource]=[:]
+    var cachedImageTextureCount:Int { imageTextures.count }
+    private var imageLoadGeneration = UUID()
+    private var draftImageRequest = ViewCaptureRequest()
+    @Published private(set) var loadingSavedImages = false
+    @Published private(set) var imageLoading = false
+    @Published var saveScanGuide = true
     private var lastDraftRender: CFTimeInterval=0
     var aimPoint: CGPoint?
     var imageHeight: Float { imageWidth*Float((draftImage?.size.height ?? 1)/(draftImage?.size.width ?? 1)) }
@@ -97,7 +103,6 @@ struct FrozenDrawingFrame {
                 try await store.loadAnnotations(room)
                 annotations = store.annotations.filter { $0.room_id == room.id }
                 try annotations.forEach { try $0.validate(room: room) }
-                await loadImageTextures(store:store)
                 if let path = room.map_path {
                     do {
                         let data = try await store.downloadAsset(path: path)
@@ -111,9 +116,14 @@ struct FrozenDrawingFrame {
             if mode == .mapping { startMapping() }
             else if savedMap != nil { startMap() }
             else { localization.fail();guidance="No room map is available. Open the task list or ask the manager to rescan this room." }
+            if mode != .mapping {
+                await loadImageTextures(store:store)
+                if !stopped { render() }
+            }
         } catch { updateTracking(.unavailable);self.error = error.localizedDescription; guidance = "AR unavailable · use the task list" }
     }
     var mapAvailable:Bool { savedMap != nil }
+    var canChangeScanGuide:Bool { mapSave.data == nil }
     private var sentinelName: String { "SiteAR.room.\(room.coordinate_id.uuidString)" }
     private func configuration(map: ARWorldMap? = nil) -> ARWorldTrackingConfiguration {
         let config = ARWorldTrackingConfiguration()
@@ -153,7 +163,7 @@ struct FrozenDrawingFrame {
         if localization.state == .aligned { render(); renderDraft(); refreshSurfaceVisuals(); guidance = "Room recognized. Saved drawings are visible." }
     }
     func reject() { localization.lose(); clearVisuals(); guidance = "Alignment rejected. Retry room recognition; saved tasks remain available." }
-    func stop() { mapSave.reset();cancelViewCapture();stopped = true; running = false; view.session.pause(); clearVisuals(); clearSurfaces() }
+    func stop() { mapSave.reset();imageLoadGeneration=UUID();loadingSavedImages=false;cancelImageRequest();cancelViewCapture();stopped = true; running = false; view.session.pause(); clearVisuals(); clearSurfaces();imageTextures.removeAll() }
     func suspend() {
         mapSave.reset()
         updateTracking(.unavailable)
@@ -223,7 +233,7 @@ struct FrozenDrawingFrame {
             guidance = "Room recognized. Saved drawings are restored."
         }
         if localization.state == .relocalizing && Date().timeIntervalSince(startedAt) > 40 {
-            localization.fail(); clearVisuals(); guidance = "Room not recognized yet. Look at captured corners and textured surfaces. Continue searching without a restart; drawings stay hidden."
+            localization.timedOut(); clearVisuals(); guidance = "Room not recognized yet. Look at captured corners and textured surfaces. Continue searching without a restart; drawings stay hidden."
         }
     }
     private func setGuidance(_ text:String) { if guidance != text { guidance=text } }
@@ -446,23 +456,53 @@ struct FrozenDrawingFrame {
         catch { throw AppError.message(kind == .area ? "Tap at least three corners on the same surface; the first three must not be on one straight line." : (kind == .image ? "Check the image, its size and position on the surface." : "Draw at least one stroke, then lift your finger.")) }
         return result
     }
-    func reload(_ items: [Annotation], store: Store) async { annotations = items; await loadImageTextures(store:store); render() }
-    func setImage(_ data: Data) async throws {
+    func reload(_ items: [Annotation], store: Store) async { guard !stopped else { return };annotations = items; await loadImageTextures(store:store); if !stopped { render() } }
+    func beginImageRequest(clearExisting:Bool = false) -> UUID {
+        draftImageRequest.cancel()
+        let request=draftImageRequest.begin()!
+        imageLoading=true
+        if clearExisting { imageData=nil;draftImage=nil;draftImageTexture=nil;renderDraft() }
+        return request
+    }
+    func imageRequestIsCurrent(_ request:UUID) -> Bool { !stopped && draftImageRequest.accepts(request) }
+    func finishImageRequest(_ request:UUID) { if draftImageRequest.finish(request) { imageLoading=false } }
+    func cancelImageRequest() { draftImageRequest.cancel();imageLoading=false }
+    func setImage(_ data: Data,request:UUID? = nil) async throws {
+        if let request, !imageRequestIsCurrent(request) { throw CancellationError() }
         let asset=try await SpatialImageAsset.prepare(data)
+        guard !stopped,request.map(imageRequestIsCurrent) ?? true else { throw CancellationError() }
         imageData=asset.data; draftImage=asset.image; draftImageTexture=asset.texture
         imageWidth=min(0.4,3/Float(asset.image.size.height/asset.image.size.width)); renderDraft()
     }
-    func cacheDraftImage(path:String) { if let draftImageTexture { imageTextures[path]=draftImageTexture } }
-    func restoreImageDraft(_ item: Annotation, store: Store) async throws {
+    func restoreImageDraft(_ item: Annotation, store: Store, request:UUID) async throws {
         guard let image=item.image else { return }
         let data=try await store.downloadAsset(path:image.path)
-        try await setImage(data); imageWidth=image.width
+        try await setImage(data,request:request)
+        guard imageRequestIsCurrent(request) else { throw CancellationError() }
+        imageWidth=image.width
     }
     private func loadImageTextures(store: Store) async {
-        for item in annotations {
-            guard let image=item.image, imageTextures[image.path] == nil else { continue }
-            do { let data=try await store.downloadAsset(path:image.path); imageTextures[image.path]=try await SpatialImageAsset.prepare(data).texture }
-            catch { self.error="A saved image could not be loaded. Its task remains available in the list. \(error.localizedDescription)" }
+        guard !stopped,!Task.isCancelled else { return }
+        let generation=UUID();imageLoadGeneration=generation
+        let validPaths=Set(annotations.compactMap { $0.image?.path })
+        imageTextures=imageTextures.filter { validPaths.contains($0.key) }
+        if localization.state == .aligned { render() }
+        let missing=validPaths.filter { imageTextures[$0] == nil }.sorted()
+        guard !missing.isEmpty,!stopped,!Task.isCancelled else { loadingSavedImages=false;return }
+        loadingSavedImages=true
+        defer { if imageLoadGeneration == generation { loadingSavedImages=false } }
+        for path in missing {
+            guard imageLoadGeneration == generation,!stopped,!Task.isCancelled else { return }
+            do {
+                let data=try await store.downloadAsset(path:path)
+                guard imageLoadGeneration == generation,!stopped,!Task.isCancelled else { return }
+                let texture=try await SpatialImageAsset.loadTexture(data)
+                guard imageLoadGeneration == generation,!stopped,!Task.isCancelled else { return }
+                imageTextures[path]=texture
+            } catch {
+                guard imageLoadGeneration == generation,!stopped,!Task.isCancelled else { return }
+                self.error="A saved image could not be loaded. Its task remains available in the list. \(error.localizedDescription)"
+            }
         }
     }
     func saveMap(store: Store) async throws -> Room {
@@ -478,6 +518,15 @@ struct FrozenDrawingFrame {
             throw AppError.message("Pause at textured views in all four directions from at least three positions. Wait for stable tracking, detected surfaces and a ready room map.")
         }
         if mapSave.data == nil {
+            let guide:String?
+            if saveScanGuide {
+                guard let buffer=view.session.currentFrame?.capturedImage,
+                      let encoded=await ScanGuideImage.capture(buffer) else {
+                    throw AppError.message("Couldn't capture the optional scan-view photo. Hold the camera steady and retry, or turn it off in Scan options.")
+                }
+                try mapSave.validate(generation)
+                guide=encoded
+            } else { guide=nil }
             let map: ARWorldMap = try await withCheckedThrowingContinuation { continuation in
                 view.session.getCurrentWorldMap { map, error in
                     if let error { continuation.resume(throwing: error) }
@@ -488,13 +537,14 @@ struct FrozenDrawingFrame {
             try mapSave.validate(generation)
             guard map.anchors.contains(where: { $0.name == sentinelName }) else { throw AppError.message("Room anchor missing from map. Restart mapping.") }
             let data = try NSKeyedArchiver.archivedData(withRootObject: map, requiringSecureCoding: true)
-            try mapSave.capture(data, generation: generation)
+            try mapSave.capture(data, generation: generation, guide:guide)
             savedMap = map
         }
         guard trackingNormal, mapped, let data = mapSave.data else { throw AppError.message("Tracking changed while saving. Recheck the room and retry.") }
         let root = "\(room.project_id.uuidString.lowercased())/\(room.id.uuidString.lowercased())/\(UUID().uuidString.lowercased())"
         let mapPath = root + ".worldmap"
         var updated = room; updated.map_path = mapPath
+        updated.scan_guide_jpeg = mapSave.guide
         updated.surfaces = detectedSurfaces.values.sorted { $0.id.uuidString < $1.id.uuidString }
         try await store.uploadAsset(path: mapPath, data: data, type: "application/octet-stream")
         try mapSave.validate(generation)
@@ -563,6 +613,7 @@ struct FrozenDrawingFrame {
         preview=anchor; view.scene.addAnchor(anchor)
     }
     func render() {
+        guard !stopped else { return }
         if let content { view.scene.removeAnchor(content) }; content = nil
         guard let alignment = localization.roomToSession, trackingNormal else { return }
         let anchor = AnchorEntity(world: alignment.matrix)

@@ -121,7 +121,7 @@ struct ProjectDetail: View {
                 if store.isLocalMode {
                     Section("Share a copy") {
                         ProjectFileShareButton(project: project)
-                        Text("Send the file with AirDrop or Files. It includes room maps, images and instructions. Importing creates an editable copy; later changes are not synchronized.")
+                        Text("Send the file with AirDrop or Files. It includes room maps, instructions and images, including any saved room-view photos. Importing creates an editable copy; later changes are not synchronized.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                 }

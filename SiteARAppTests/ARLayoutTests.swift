@@ -20,6 +20,7 @@ import RealityKit
         let project=Project(owner_id:store.userID!,name:"Layout fixture")
         var room=Room(project_id:project.id,name:"Ein langer Raumname für die Layoutprüfung")
         room.map_path="test-only.worldmap"
+        room.scan_guide_jpeg=sampleImage().jpegData(compressionQuality:0.5)?.base64EncodedString()
         let patch=SurfacePatch(id:UUID(),pose:.identity,vertices:[Point3(.zero),Point3(SIMD3(2,0,0)),Point3(SIMD3(2,0,2))],vertical:false)
         let wallPose=try Pose(simd_float4x4(simd_quatf(angle:-Float.pi/2,axis:SIMD3(1,0,0))))
         let wall=SurfacePatch(id:UUID(),pose:wallPose,vertices:[Point3(.zero),Point3(SIMD3(2,0,0)),Point3(SIMD3(2,0,2.4)),Point3(SIMD3(0,0,2.4))],vertical:true)
@@ -99,6 +100,49 @@ import RealityKit
         ar.updateTracking(.none)
         XCTAssertTrue(ar.trackingNormal);XCTAssertFalse(ar.lineDraft.isDrawing) // Must start a fresh touch.
         ar.stop()
+    }
+    func testFailedOrSupersededImageRestoreCannotUseAnOlderDraft() async throws {
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:folder) }
+        let store=Store(localURL:folder.appendingPathComponent("local.json"))
+        let room=Room(project_id:UUID(),name:"Image fixture")
+        let ar=ARController(room:room,mode:.editing)
+        let data=try XCTUnwrap(sampleImage().pngData())
+        try await ar.setImage(data)
+        XCTAssertNotNil(ar.imageData)
+        var missing=Annotation(room:room,kind:.image,pose:.identity,title:"Other image",detail:"")
+        missing.image=SpatialImage(path:"missing/fixture.png",width:0.4,height:0.25)
+        let restore=ar.beginImageRequest(clearExisting:true)
+        do { try await ar.restoreImageDraft(missing,store:store,request:restore);XCTFail("Missing image must fail") } catch {}
+        XCTAssertNil(ar.imageData);XCTAssertNil(ar.draftImage)
+        ar.finishImageRequest(restore);XCTAssertFalse(ar.imageLoading)
+        let older=ar.beginImageRequest(),newer=ar.beginImageRequest()
+        do { try await ar.setImage(data,request:older);XCTFail("Superseded image must not be applied") } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        ar.finishImageRequest(older);XCTAssertTrue(ar.imageLoading)
+        try await ar.setImage(data,request:newer);ar.finishImageRequest(newer)
+        XCTAssertNotNil(ar.imageData);XCTAssertFalse(ar.imageLoading)
+        ar.stop()
+    }
+    func testImageReloadPrunesOldTexturesAndCannotRenderAfterStop() async throws {
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:folder) }
+        let store=Store(localURL:folder.appendingPathComponent("local.json"))
+        let room=Room(project_id:UUID(),name:"Texture fixture")
+        let data=try XCTUnwrap(sampleImage().pngData())
+        var items:[Annotation]=[]
+        for index in 0..<2 {
+            let path="fixture/room/\(index).png"
+            try await store.uploadAsset(path:path,data:data,type:"image/png")
+            var item=Annotation(room:room,kind:.image,pose:.identity,title:"Image \(index)",detail:"")
+            item.image=SpatialImage(path:path,width:0.4,height:0.25);items.append(item)
+        }
+        let ar=ARController(room:room,mode:.walkthrough)
+        ar.trackingNormal=true;ar.localization.propose(.identity,method:.map);ar.confirm()
+        await ar.reload(items,store:store);XCTAssertEqual(ar.cachedImageTextureCount,2)
+        await ar.reload([items[1]],store:store);XCTAssertEqual(ar.cachedImageTextureCount,1)
+        ar.stop();XCTAssertEqual(ar.cachedImageTextureCount,0);XCTAssertTrue(ar.view.scene.anchors.isEmpty)
+        await ar.reload(items,store:store)
+        XCTAssertEqual(ar.cachedImageTextureCount,0);XCTAssertTrue(ar.view.scene.anchors.isEmpty)
     }
     func testLongScanRenderingAndMemoryFallbackStayBounded() throws {
         let room=Room(project_id:UUID(),name:"Long scan fixture")
@@ -213,7 +257,6 @@ import RealityKit
         var drawing=Annotation(room:room,kind:.line,pose:.identity,points:a,title:"Zeichnung",detail:""); drawing.strokes=[a,b]
         try await ar.setImage(sampleImage().pngData()!)
         let path="\(project.id.uuidString.lowercased())/\(room.id.uuidString.lowercased())/fixture.png"
-        ar.cacheDraftImage(path:path)
         let bytes=try XCTUnwrap(ar.imageData); try await store.uploadAsset(path:path,data:bytes,type:"image/png")
         var image=Annotation(room:room,kind:.image,pose:.identity,points:[Point3(.zero)],title:"Bild",detail:"")
         image.image=SpatialImage(path:path,width:0.4,height:0.25)
@@ -226,7 +269,8 @@ import RealityKit
         XCTAssertEqual(restoredBytes,bytes)
         let restored=try await SpatialImageAsset.prepare(restoredBytes)
         XCTAssertEqual(restored.image.size,ar.draftImage?.size)
-        ar.annotations=[drawing,image]; ar.localization.propose(.identity,method:.map); ar.confirm()
+        ar.localization.propose(.identity,method:.map); ar.confirm()
+        await ar.reload([drawing,image],store:store)
         let roots=ar.view.scene.anchors.flatMap { Array($0.children) }
         XCTAssertEqual(roots.first(where:{$0.name==drawing.id.uuidString})?.children.count,2) // Two disconnected tube meshes.
         XCTAssertEqual(roots.first(where:{$0.name==image.id.uuidString})?.children.count,1) // One textured image, no pin.

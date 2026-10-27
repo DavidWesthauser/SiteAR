@@ -34,12 +34,13 @@ struct ARScreen: View {
     @State private var tools = true
     @State private var pickingPhoto=false
     @State private var photoSelection: PhotosPickerItem?
-    @State private var imageLoading=false
     @State private var scanMore = false
     @State private var showingScanOptions=false
     @State private var showingWorkDetails=false
     @State private var showingPlacement=false
     @State private var restartingScan=false
+    @State private var showingScanGuide=false
+    @State private var scanGuideImage:UIImage?
     init(room: Room, mode: ARMode, manager: Bool) {
         self.manager = manager; startSession=true
         _ar = StateObject(wrappedValue: ARController(room: room, mode: mode))
@@ -75,6 +76,13 @@ struct ARScreen: View {
                 VStack(alignment:.leading,spacing:5) {
                     Label(statusTitle,systemImage:ar.localization.state == .aligned ? "checkmark.circle.fill" : "viewfinder").font(.subheadline.weight(.semibold))
                     if mode == .mapping || ar.localization.state != .aligned { Text(ar.guidance).font(.caption).lineLimit(3).fixedSize(horizontal:false,vertical:true) }
+                    if mode != .mapping,ar.localization.state != .aligned,let guide=room.scan_guide_jpeg {
+                        Button("Show saved viewpoint",systemImage:"photo") {
+                            if let image=ScanGuideImage.thumbnail(guide) { scanGuideImage=image;showingScanGuide=true }
+                            else { ar.error="The saved viewpoint photo could not be opened. Continue looking for familiar room details." }
+                        }.font(.caption).frame(minHeight:44,alignment:.leading).accessibilityIdentifier("room.scanGuide")
+                    }
+                    if ar.loadingSavedImages { Text("Loading image instructions…").font(.caption).foregroundStyle(.secondary) }
                 }.frame(maxWidth:.infinity,alignment:.leading).padding(10).background(.regularMaterial,in:RoundedRectangle(cornerRadius:14))
                 GeometryReader { proxy in
                     ZStack {
@@ -132,11 +140,11 @@ struct ARScreen: View {
         .photosPicker(isPresented:$pickingPhoto,selection:$photoSelection,matching:.images)
         .onChange(of:photoSelection) { _,item in
             guard let item else { return }
-            imageLoading=true
+            let request=ar.beginImageRequest()
             Task {
-                defer { imageLoading=false }
-                do { guard let data=try await item.loadTransferable(type:Data.self) else { throw AppError.message("Could not load this image.") }; try await ar.setImage(data) }
-                catch { ar.error=error.localizedDescription }
+                defer { ar.finishImageRequest(request) }
+                do { guard let data=try await item.loadTransferable(type:Data.self) else { throw AppError.message("Could not load this image.") }; try await ar.setImage(data,request:request) }
+                catch { if ar.imageRequestIsCurrent(request) { ar.error=error.localizedDescription } }
             }
         }
         .onChange(of: phase) { _, phase in if phase == .active { ar.resume() } else { ar.suspend() } }
@@ -150,8 +158,8 @@ struct ARScreen: View {
                 guard url.startAccessingSecurityScopedResource() else { throw AppError.message("Cannot read selected file.") }
                 defer { url.stopAccessingSecurityScopedResource() }
                 let data=try Data(contentsOf:url,options:.mappedIfSafe)
-                imageLoading=true
-                Task { defer { imageLoading=false };do { try await ar.setImage(data) } catch { ar.error=error.localizedDescription } }
+                let request=ar.beginImageRequest()
+                Task { defer { ar.finishImageRequest(request) };do { try await ar.setImage(data,request:request) } catch { if ar.imageRequestIsCurrent(request) { ar.error=error.localizedDescription } } }
             } catch { ar.error=error.localizedDescription }
         }
         .sheet(isPresented: $taskList, onDismiss: { Task { await reload() } }) {
@@ -160,12 +168,25 @@ struct ARScreen: View {
                     .navigationTitle("Room tasks").toolbar { Button("Done") { taskList = false } }
             }.environmentObject(store)
         }
+        .sheet(isPresented:$showingScanGuide) {
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment:.leading,spacing:16) {
+                        if let scanGuideImage { Image(uiImage:scanGuideImage).resizable().scaledToFit().accessibilityLabel("Photo saved during the original room scan") }
+                        Text("Find this view in the room, then look around the same details. The photo is a visual guide; ARKit still needs to recognize the room before drawings appear.")
+                            .font(.body)
+                    }.padding()
+                }.navigationTitle("Saved viewpoint").navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement:.confirmationAction) { Button("Done") { showingScanGuide=false } } }
+            }
+        }
         .sheet(item: $ar.selected, onDismiss: { Task { await reload() } }) { item in
             NavigationStack { TaskEditor(item: item, room: room, manager: manager, onReposition: mode == .editing && [.line,.area,.image].contains(item.kind) ? {
+                guard ar.draft.isEmpty else { ar.error="Save or clear your current drawing before repositioning another instruction.";return }
                 replacing = item; ar.clearDraft(); ar.tool = item.kind; title = item.title; detail = item.detail; priority = item.priority; tools = true
                 if item.kind == .image {
-                    imageLoading=true
-                    Task { defer { imageLoading=false }; do { try await ar.restoreImageDraft(item,store:store) } catch { ar.error=error.localizedDescription } }
+                    let request=ar.beginImageRequest(clearExisting:true)
+                    Task { defer { ar.finishImageRequest(request) }; do { try await ar.restoreImageDraft(item,store:store,request:request) } catch { if ar.imageRequestIsCurrent(request) { ar.error=error.localizedDescription } } }
                 }
             } : nil) }.environmentObject(store)
         }
@@ -247,6 +268,11 @@ struct ARScreen: View {
                         Text(ar.trackingIssue == .none ? "Tracking is stable. Continue scanning from overlapping viewpoints." : ar.trackingIssue.instruction)
                         Button("Restart scan",role:.destructive) { restartingScan=true }
                     }
+                    Section("Room recognition") {
+                        Toggle("Save a viewpoint photo",isOn:$ar.saveScanGuide).disabled(!ar.canChangeScanGuide)
+                        Text(ar.canChangeScanGuide ? "A small photo helps a technician find a familiar view. It is included when the project is exported." : "This save attempt already captured its map and photo. Restart the scan to change the photo choice.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 .confirmationDialog("Restart and discard this unsaved scan?",isPresented:$restartingScan,titleVisibility:.visible) {
                     Button("Restart scan",role:.destructive) { showingScanOptions=false;ar.startMapping() }
@@ -265,7 +291,7 @@ struct ARScreen: View {
     }
     private var editorTools: some View {
         VStack(alignment:.leading,spacing:10) {
-            if let replacing { Text("Repositioning: \(replacing.title)").font(.headline); Button("Cancel") { self.replacing=nil; ar.clearDraft(); ar.resumeCamera(); title=""; detail="" } }
+            if let replacing { Text("Repositioning: \(replacing.title)").font(.headline); Button("Cancel") { self.replacing=nil; ar.cancelImageRequest();ar.clearDraft(); ar.resumeCamera(); title=""; detail="" } }
             Picker("Tool",selection:Binding(get:{ar.tool},set:selectTool)) {
                 Text("Draw").tag(AnnotationKind.line); Text("Area").tag(AnnotationKind.area); Text("Image").tag(AnnotationKind.image)
             }.pickerStyle(.segmented).accessibilityIdentifier("drawing.tools")
@@ -274,7 +300,7 @@ struct ARScreen: View {
                 VStack(alignment:.leading,spacing:8) { lockButton; if ar.tool == .image { imageButton } }
             }
             if ar.tool == .image {
-                if imageLoading { ProgressView("Loading image…") }
+                if ar.imageLoading { ProgressView("Loading image…") }
                 else if let image=ar.draftImage {
                     HStack(spacing:10) {
                         Image(uiImage:image).resizable().scaledToFit().frame(width:44,height:40).accessibilityHidden(true)
@@ -312,11 +338,12 @@ struct ARScreen: View {
             Button { ar.clearDraft() } label: { Image(systemName:"trash").frame(width:22,height:22) }
                 .buttonStyle(.bordered).frame(minWidth:44,minHeight:44).accessibilityLabel("Leeren").disabled(ar.draft.isEmpty && ar.drawingPlane == nil)
             Button { saveDrawing() } label: { Label("Save",systemImage:"checkmark").font(.headline).lineLimit(1).minimumScaleFactor(0.75).frame(maxWidth:.infinity,minHeight:36) }
-                .buttonStyle(.borderedProminent).accessibilityIdentifier("drawing.save").disabled(ar.draft.isEmpty || saving || imageLoading)
+                .buttonStyle(.borderedProminent).accessibilityIdentifier("drawing.save").disabled(ar.draft.isEmpty || saving || ar.imageLoading || (ar.tool == .image && ar.imageData == nil))
         }
     }
     private func selectTool(_ kind:AnnotationKind) {
         guard kind == ar.tool || ar.draft.isEmpty else { ar.error="Save or clear the current drawing first."; return }
+        if kind != .image && ar.tool == .image { ar.cancelImageRequest() }
         ar.tool=kind
         if kind == .image && ar.draftImage == nil { pickingPhoto=true }
     }
@@ -334,7 +361,7 @@ struct ARScreen: View {
                 }
                 var item = try ar.makeAnnotation(kind: ar.tool, title: label.isEmpty ? (ar.tool == .area ? "Area marking" : (ar.tool == .image ? "Image" : "Drawing")) : label, detail: detail, priority: priority,image:attachment)
                 if let attachment,let data=ar.imageData {
-                    try await store.uploadAsset(path:attachment.path,data:data,type:"image/png"); ar.cacheDraftImage(path:attachment.path)
+                    try await store.uploadAsset(path:attachment.path,data:data,type:"image/png")
                 }
                 if let replacing { item.id = replacing.id; item.status = replacing.status }
                 try await store.saveInstruction(item, room: room, replacing: replacing != nil)

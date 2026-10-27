@@ -23,12 +23,22 @@ public struct Room: Codable, Identifiable, Equatable, Sendable {
     public var spatial_version: Int = 1
     public var coordinate_id: UUID = UUID()
     public var map_path: String?
+    /// Optional human-visible scene photo for revisiting a scan, never a localization marker.
+    public var scan_guide_jpeg: String?
     public var marker: Marker?
     public var reference_points: [Point3] = []
     public var reference_notes: String = ""
     public var surfaces: [SurfacePatch]?
     public init(id: UUID = UUID(), project_id: UUID, name: String) { self.id = id; self.project_id = project_id; self.name = name }
     public func validate() throws {
+        if let guide = scan_guide_jpeg {
+            guard guide.utf8.count <= 87_384,
+                  let bytes = Data(base64Encoded: guide), bytes.count >= 4, bytes.count <= 65_536,
+                  bytes.base64EncodedString() == guide,
+                  bytes.starts(with: [0xff, 0xd8]), bytes.suffix(2).elementsEqual([0xff, 0xd9]) else {
+                throw SpatialError.invalidGeometry
+            }
+        }
         guard spatial_version == 1, reference_points.count == 0 || reference_points.count == 2,
               reference_points.allSatisfy({ [$0.x,$0.y,$0.z].allSatisfy(\.isFinite) }),
               marker.map({ $0.width.isFinite && $0.height.isFinite && $0.width >= 0.05 && $0.width <= 2 && $0.height > 0 }) ?? true else { throw SpatialError.incompatibleVersion }

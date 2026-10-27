@@ -196,6 +196,37 @@ final class SpatialTests: XCTestCase {
 }
 
 extension SpatialTests {
+    func testTimedOutMapSearchStillRequiresAllEvidenceBeforeLateRecovery() {
+        var state=Localization();state.searching();state.timedOut()
+        XCTAssertEqual(state.state,.failed);XCTAssertTrue(state.searchTimedOut)
+        XCTAssertNil(state.roomToSession)
+        XCTAssertFalse(state.recoverMap(restoredRoomAnchor:false,normalTracking:true,stableSeconds:5,mapAvailable:true))
+        XCTAssertFalse(state.recoverMap(restoredRoomAnchor:true,normalTracking:false,stableSeconds:5,mapAvailable:true))
+        XCTAssertFalse(state.recoverMap(restoredRoomAnchor:true,normalTracking:true,stableSeconds:1.99,mapAvailable:true))
+        XCTAssertFalse(state.recoverMap(restoredRoomAnchor:true,normalTracking:true,stableSeconds:5,mapAvailable:false))
+        XCTAssertEqual(state.state,.failed);XCTAssertTrue(state.searchTimedOut)
+        XCTAssertNil(state.roomToSession)
+        XCTAssertTrue(state.recoverMap(restoredRoomAnchor:true,normalTracking:true,stableSeconds:2,mapAvailable:true))
+        XCTAssertEqual(state.state,.aligned);XCTAssertEqual(state.roomToSession,.identity)
+        XCTAssertFalse(state.searchTimedOut)
+    }
+    func testHardMapFailureCannotAutoRecoverOrBeConvertedIntoTimeout() {
+        var state=Localization();state.searching();state.timedOut();state.fail()
+        XCTAssertEqual(state.state,.failed);XCTAssertFalse(state.searchTimedOut)
+        state.timedOut()
+        XCTAssertFalse(state.searchTimedOut)
+        XCTAssertFalse(state.recoverMap(restoredRoomAnchor:true,normalTracking:true,stableSeconds:10,mapAvailable:true))
+        XCTAssertNil(state.roomToSession)
+    }
+    func testTimeoutEvidenceIsClearedWhenSearchOrAlignmentChanges() {
+        var state=Localization();state.searching();state.timedOut();state.searching()
+        XCTAssertFalse(state.searchTimedOut);XCTAssertEqual(state.state,.relocalizing)
+        state.timedOut();state.propose(.identity,method:.manual)
+        XCTAssertFalse(state.searchTimedOut);XCTAssertEqual(state.state,.verifying)
+        state.searching();state.timedOut();state.lose()
+        XCTAssertFalse(state.searchTimedOut);XCTAssertEqual(state.state,.lost)
+        XCTAssertFalse(state.recoverMap(restoredRoomAnchor:true,normalTracking:true,stableSeconds:10,mapAvailable:true))
+    }
     func testMapRecoveryNeedsRestoredRoomAnchorStableTrackingAndMappedEvidence() {
         var state = Localization(); state.searching()
         XCTAssertFalse(state.recoverMap(restoredRoomAnchor:false, normalTracking:true, stableSeconds:5, mapAvailable:true))

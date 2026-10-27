@@ -4,6 +4,7 @@ import Foundation
 public struct MapSaveTransaction: Sendable {
     public private(set) var generation = UUID()
     public private(set) var data: Data?
+    public private(set) var guide: String?
     public private(set) var publication: Room?
 
     public init() {}
@@ -11,6 +12,7 @@ public struct MapSaveTransaction: Sendable {
     public mutating func reset() {
         generation = UUID()
         data = nil
+        guide = nil
         publication = nil
     }
 
@@ -23,14 +25,15 @@ public struct MapSaveTransaction: Sendable {
         guard generation == self.generation else { throw Failure.savedSessionChanged }
     }
 
-    public mutating func capture(_ data: Data, generation: UUID) throws {
+    public mutating func capture(_ data: Data, generation: UUID, guide: String? = nil) throws {
         try validate(generation)
         self.data = data
+        self.guide = guide
     }
 
     public mutating func stage(_ room: Room, generation: UUID) throws {
         try validate(generation)
-        guard data != nil, room.map_path != nil else { throw Failure.incompleteSnapshot }
+        guard data != nil, room.map_path != nil, room.scan_guide_jpeg == guide else { throw Failure.incompleteSnapshot }
         try room.validate()
         publication = room
     }

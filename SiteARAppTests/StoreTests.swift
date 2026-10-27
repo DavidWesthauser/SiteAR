@@ -62,6 +62,34 @@ extension StoreTests {
         var movedRoom = room; movedRoom.map_path = "another.worldmap"
         do { try await reopened.publishRoom(movedRoom); XCTFail("Should reject replacing a published map") } catch {}
     }
+    func testSavedScanGuidePersistsAndCannotBeChangedWithPublishedMap() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("local.json")
+        let store = Store(localURL: url)
+        try await store.createProject(name: "Guide persistence fixture")
+        let project = try XCTUnwrap(store.projects.first)
+        try await store.createRoom(in: project, name: "Room")
+        var room = try XCTUnwrap(store.rooms.first)
+        // Framed JPEG byte stub and synthetic map bytes are test fixtures, not camera assets.
+        room.scan_guide_jpeg = Data([0xff,0xd8,0x11,0xff,0xd9]).base64EncodedString()
+        room.map_path = "\(project.id)/\(room.id)/test.worldmap"
+        try await store.uploadAsset(path: room.map_path!, data: Data([1,2,3]), type: "application/octet-stream")
+        try await store.publishRoom(room)
+        let reopened = Store(localURL: url)
+        XCTAssertEqual(reopened.rooms.first, room)
+        XCTAssertEqual(reopened.rooms.first?.coordinate_id, room.coordinate_id)
+        for guide in [nil, Data([0xff,0xd8,0x22,0xff,0xd9]).base64EncodedString()] as [String?] {
+            var changed = room
+            changed.scan_guide_jpeg = guide
+            do { try await reopened.publishRoom(changed); XCTFail("Published guide must remain bound to its map") } catch {}
+            XCTAssertEqual(reopened.rooms.first, room)
+        }
+        var renamed = room
+        renamed.name = "Renamed room"
+        try await reopened.publishRoom(renamed)
+        XCTAssertEqual(Store(localURL: url).rooms.first, renamed)
+    }
     func testLocalProjectAndRoomCRUDPersistsAndCascadesOnlyOwnedRecords() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

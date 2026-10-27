@@ -65,15 +65,22 @@ public struct Localization: Sendable {
     public private(set) var state: LocalizationState = .searching
     public private(set) var candidate: Pose?
     public private(set) var method: AlignmentMethod?
+    public private(set) var searchTimedOut = false
     public init() {}
     public var roomToSession: Pose? { state == .aligned ? candidate : nil }
     public mutating func searching() { self = Localization(); state = .relocalizing }
-    public mutating func propose(_ pose: Pose, method: AlignmentMethod) { candidate = pose; self.method = method; state = .verifying }
+    public mutating func propose(_ pose: Pose, method: AlignmentMethod) { searchTimedOut = false; candidate = pose; self.method = method; state = .verifying }
     public mutating func confirm(normalTracking: Bool) { if normalTracking && candidate != nil && state == .verifying { state = .aligned } }
     @discardableResult public mutating func recoverMap(restoredRoomAnchor: Bool, normalTracking: Bool, stableSeconds: Double, mapAvailable: Bool) -> Bool {
-        guard state == .relocalizing, restoredRoomAnchor, normalTracking, stableSeconds >= 2, mapAvailable else { return false }
+        guard state == .relocalizing || (state == .failed && searchTimedOut),
+              restoredRoomAnchor, normalTracking, stableSeconds >= 2, mapAvailable else { return false }
         propose(.identity, method: .map); confirm(normalTracking: true); return true
     }
-    public mutating func lose() { candidate = nil; method = nil; state = .lost }
+    /// The live ARKit search continues after a guidance timeout; hard failures do not.
+    public mutating func timedOut() {
+        guard state == .relocalizing else { return }
+        lose(); state = .failed; searchTimedOut = true
+    }
+    public mutating func lose() { searchTimedOut = false; candidate = nil; method = nil; state = .lost }
     public mutating func fail() { lose(); state = .failed }
 }

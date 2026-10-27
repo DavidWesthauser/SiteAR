@@ -68,6 +68,9 @@ final class WorkflowTests: XCTestCase {
         app.buttons["Scan options and progress"].tap()
         XCTAssertTrue(app.staticTexts["Directions"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["Positions"].exists)
+        let guideOption=app.switches["Save a viewpoint photo"]
+        XCTAssertTrue(guideOption.waitForExistence(timeout:5))
+        XCTAssertTrue(guideOption.isEnabled)
         XCTAssertFalse(app.buttons["Generate print"].exists)
         XCTAssertFalse(app.buttons["Register detected marker"].exists)
         app.buttons["Done"].tap()

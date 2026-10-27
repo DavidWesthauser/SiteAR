@@ -145,7 +145,7 @@ extension Store {
         if isLocalMode { try changeLocal { data in
             guard let i = data.rooms.firstIndex(where: { $0.id == room.id }), data.rooms[i].coordinate_id == room.coordinate_id else { throw AppError.message("Room coordinate system changed. Reopen the room.") }
             let old = data.rooms[i]
-            if old.map_path != nil && (old.map_path != room.map_path || old.marker != room.marker || old.reference_points != room.reference_points || old.reference_notes != room.reference_notes || old.surfaces != room.surfaces) { throw AppError.message("Published room maps cannot be replaced. Create a new room for remapping.") }
+            if old.map_path != nil && (old.map_path != room.map_path || old.scan_guide_jpeg != room.scan_guide_jpeg || old.marker != room.marker || old.reference_points != room.reference_points || old.reference_notes != room.reference_notes || old.surfaces != room.surfaces) { throw AppError.message("Published room maps cannot be replaced. Create a new room for remapping.") }
             data.rooms[i] = room
         } } else { try await client().update("rooms", id: room.id, value: room) }
     }

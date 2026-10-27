@@ -2,7 +2,7 @@
 begin;
 set local search_path = public, extensions;
 create extension if not exists pgtap with schema extensions;
-select plan(28);
+select plan(31);
 set local role authenticated;
 select set_config('request.jwt.claim.sub','10000000-0000-0000-0000-000000000001',true);
 select is((select count(*) from public.projects where id='20000000-0000-0000-0000-000000000001'),1::bigint,'Manager reads own project');
@@ -20,8 +20,10 @@ select throws_ok($$update public.rooms set map_path=null where id='30000000-0000
 select lives_ok($$insert into public.annotations(id,room_id,coordinate_id,kind,pose,title)
  select '50000000-0000-0000-0000-000000000001',id,coordinate_id,'marker','[1,0,0,0,0,1,0,0,0,0,1,0,1,2,3,1]','Paint wall' from public.rooms where id='30000000-0000-0000-0000-000000000001'$$,'Manager creates task');
 select lives_ok($$insert into storage.objects(bucket_id,name) values('room-assets','20000000-0000-0000-0000-000000000001/30000000-0000-0000-0000-000000000001/test.worldmap')$$,'Manager uploads private asset metadata');
-select lives_ok($$insert into public.rooms(id,project_id,name,map_path) values('30000000-0000-0000-0000-000000000003','20000000-0000-0000-0000-000000000001','Map without mandatory references','20000000-0000-0000-0000-000000000001/30000000-0000-0000-0000-000000000003/test.worldmap')$$,'Room map can be saved without a marker or manual dots');
+select lives_ok($$insert into public.rooms(id,project_id,name,map_path,scan_guide_jpeg) values('30000000-0000-0000-0000-000000000003','20000000-0000-0000-0000-000000000001','Map without mandatory references','20000000-0000-0000-0000-000000000001/30000000-0000-0000-0000-000000000003/test.worldmap','/9gR/9k=')$$,'Room map can be saved without a marker or manual dots');
 select ok((select marker is null and reference_points='[]'::jsonb from public.rooms where id='30000000-0000-0000-0000-000000000003'),'Recovery references are optional');
+select is((select scan_guide_jpeg from public.rooms where id='30000000-0000-0000-0000-000000000003'),'/9gR/9k=','Viewpoint guide persists with the room');
+select throws_ok($$update public.rooms set scan_guide_jpeg=null where id='30000000-0000-0000-0000-000000000003'$$,'P0001','Published spatial maps are immutable; create a new room for remapping','Published viewpoint cannot silently change');
 select lives_ok($$insert into public.annotations(id,room_id,coordinate_id,kind,pose,title,image)
  select '50000000-0000-0000-0000-000000000002',id,coordinate_id,'image','[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]','Bild','{"path":"20000000-0000-0000-0000-000000000001/30000000-0000-0000-0000-000000000001/image.png","width":0.4,"height":0.3}' from public.rooms where id='30000000-0000-0000-0000-000000000001'$$,'Manager saves image metadata');
 select lives_ok($$insert into public.annotations(id,room_id,coordinate_id,kind,pose,points,title,strokes)
@@ -29,6 +31,7 @@ select lives_ok($$insert into public.annotations(id,room_id,coordinate_id,kind,p
 select is((select jsonb_array_length(strokes) from public.annotations where id='50000000-0000-0000-0000-000000000003'),2,'Stroke boundaries persist');
 select set_config('request.jwt.claim.sub','10000000-0000-0000-0000-000000000002',true);
 select is((select count(*) from public.annotations where id='50000000-0000-0000-0000-000000000001'),1::bigint,'Assigned worker reads task');
+select is((select scan_guide_jpeg from public.rooms where id='30000000-0000-0000-0000-000000000003'),'/9gR/9k=','Assigned worker can read viewpoint guide');
 select is((select count(*) from storage.objects where bucket_id='room-assets' and name like '%/test.worldmap'),1::bigint,'Assigned worker reads private map');
 select lives_ok($$select public.set_task_status('50000000-0000-0000-0000-000000000001','completed')$$,'Worker completes task');
 select is((select status from public.annotations where id='50000000-0000-0000-0000-000000000001'),'completed','Status persists');
