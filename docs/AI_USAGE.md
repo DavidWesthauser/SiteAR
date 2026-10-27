@@ -10,6 +10,8 @@ Concrete examples of generated code that needed correction:
 
 - 27 October 2026: focused review found that pending map bytes/publication survived a new AR coordinate origin. The fix adds MapSaveTransaction generation checks around asynchronous results, clears retry state on interruption/reset and distinguishes an already-saved late response from an unsaved failure. Deterministic tests cover the callback ordering; physical room accuracy is still unverified.
 
+- 27 October 2026: review found that a failed image reposition could reuse a previously selected photo, and that slow earlier selections could overwrite newer ones. Image request tokens, explicit draft clearing and simulator tests were added; this is a factual code-review example, not evidence of an individual student’s contribution.
+
 These are factual development examples, **not claims that either student personally performed the review or understands the code**. Both students' individual reflections are pending and must be written from their actual experience. Do not invent contribution histories, reviews or earlier commits.
 
 For each student, record before submission:

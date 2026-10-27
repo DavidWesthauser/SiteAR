@@ -26,7 +26,7 @@ Record phone/iOS/app version, room and coordinate IDs, date, lighting and approx
 
 Do not connect the backend for the current file-transfer test. Use [backend setup](BACKEND_SETUP.md) when cloud work resumes.
 
-1. Apply migrations 001, 002 AND 003 to a development Supabase project. Configure matching backend settings in both phone builds, register two users, and sign in manager on A and worker on B. Local rooms do not migrate automatically; create a new cloud test project/room.
+1. Apply migrations 001, 002, 003 AND 004 to a development Supabase project. Configure matching backend settings in both phone builds, register two users, and sign in manager on A and worker on B. Local rooms do not migrate automatically; create a new cloud test project/room.
 2. Repeat scan/drawing creation on A. Verify the room's map_path and surfaces metadata and its private map object exist. Share with B's registered email and end the session on A.
 3. On B refresh Projects, select the shared room and start walkthrough. Recover the map and inspect the intended wall placement from several positions. Complete a task, refresh on A, and verify the status.
 4. Repeat with the camera-only phone as both manager and worker. No depth/RoomPlan dependency should occur. Record cross-device physical error separately from single-device results.
@@ -94,3 +94,11 @@ Check Cancel/Finish over bright and dark real camera scenes, including disabled 
 - Force a disposable map-upload failure, then restart scanning and save again. Compare the restored instruction against the newly scanned room; no cached old-origin map may be reused. Background during map capture/upload and repeat. Simulator domain fixtures cover invalidation without pretending to scan a room.
 - For a future configured backend test, interrupt while publication is in flight. If the server save succeeds, the app must report that the room was saved and require reopening/recognition, rather than retrying a different map against an immutable room. If the response is lost, reopen and refresh the room to reconcile its state.
 - Check the four small direction bars and position hint over bright/dark camera scenes at large text sizes. Bars describe qualified views, not scanned wall percentages. Record time to save, recovery time and physical placement error before claiming better recognition.
+
+
+## Saved-view guidance and image loading (physical test pending)
+
+- Scan a room with the viewpoint-photo option enabled. After finishing, reopen walkthrough and choose **Show saved viewpoint** while recognition searches. The photo must match a real previously scanned view and remain readable in portrait. Look for those same natural details; it is a guide for the person, not an AR detection target or evidence that the room has aligned.
+- Export/import the project to the second phone and check the same photo appears. Disable the option on a new scan and check no viewpoint photo is available. Older rooms remain usable without one. The photo is included in exported files; share them only with the intended recipient.
+- Keep searching past the timeout and then point at the captured scene. When ARKit eventually returns valid tracking and the saved room anchor, drawings should appear without requiring the button; missing anchor, unstable tracking or failure must keep them hidden. Record whether this actually succeeds on each device.
+- Add and replace several image instructions; check the new images load, that removed/replaced images do not remain visible, and that closing AR during image loading does not resurrect content or overwrite another image. Display textures are limited to 1024 pixels on their longest edge while saved source images remain up to 2048; inspect the visual quality at working distance. Measure actual memory/temperature on the phone; the app still retains the textures of all currently active image instructions.

@@ -27,7 +27,7 @@ Import creates new project, room and annotation IDs with rewritten asset paths. 
 
 The transfer codec streams raw assets in at most 1 MiB chunks with SHA256, preceded by a bounded manifest. Limits are 16 MiB manifest, 256 MiB per asset, 1 GiB total assets, 256 rooms, 2,000 annotations and 100,000 geometry points. It rejects unsafe paths/symlinks, missing files, invalid associations, corruption, truncation, trailing bytes and unsupported versions. Inactive legacy marker images are excluded. Export/import roundtrip tests establish file integrity, not physical room-recognition success.
 
-The technician still needs to observe recognizable previously mapped views until ARKit restores the matching anchor and stable tracking. Measured-distance placement supports drawing placement only; it cannot recover a saved coordinate frame. Failed recovery leaves spatial overlays hidden.
+New scans can optionally save a bounded JPEG of the manager’s current view with the room metadata. The technician can open this photo to find recognizable previously mapped details; it is only a human guide and is included in the project file. It does not act as a fixed marker, provide an AR transform or prove alignment. Older rooms work without it. The technician still needs to observe recognizable previously mapped views until ARKit restores the matching anchor and stable tracking. Measured-distance placement supports drawing placement only; it cannot recover a saved coordinate frame. Failed recovery leaves spatial overlays hidden.
 
 ## Future provider prototype, deferred
 
