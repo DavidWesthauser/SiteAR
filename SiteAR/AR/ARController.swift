@@ -62,6 +62,7 @@ struct FrozenDrawingFrame {
     @Published private(set) var renderingReduced=false
     var cachedSurfaceCount:Int { detectedSurfaces.count }
     private var lastProgressUpdate: TimeInterval = 0
+    private var lastMiniatureUpdate: TimeInterval = 0
     private var coverage = ScanCoverage()
     var annotations: [Annotation] = []
     private var savedMap: ARWorldMap?
@@ -69,6 +70,11 @@ struct FrozenDrawingFrame {
     private var startedAt = Date()
     private var content: AnchorEntity?
     private var preview: AnchorEntity?
+    private struct RenderedContent {
+        struct Key: Equatable { let annotations: [Annotation]; let textures: Set<String>; let alignment: Pose }
+        let key: Key; let anchor: AnchorEntity
+    }
+    private var renderedContent: RenderedContent?
     private var stopped = false
     private var running = false
     private var restoredSentinel = false
@@ -80,6 +86,9 @@ struct FrozenDrawingFrame {
         self.room = room; self.mode = mode
         super.init()
         showSurfaceGuides = mode == .mapping
+        // Overlays are flat unlit guides; skip camera post-processing and scene understanding the app never uses.
+        view.renderOptions = [.disableMotionBlur,.disableDepthOfField,.disableCameraGrain,.disableHDR,.disableFaceMesh,.disablePersonOcclusion,.disableGroundingShadows]
+        view.environment.sceneUnderstanding.options = []
         view.session.delegate = self; view.session.delegateQueue = .main
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
         view.addGestureRecognizer(tap); tapRecognizer = tap
@@ -130,7 +139,8 @@ struct FrozenDrawingFrame {
         config.planeDetection = [.horizontal, .vertical]
         config.isAutoFocusEnabled=true
         config.initialWorldMap = map
-        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) { config.frameSemantics.insert(.sceneDepth) }
+        // No depth stream or environment probes: nothing reads them, and both cost GPU time every frame.
+        config.environmentTexturing = .none
         return config
     }
     private func reset(_ config: ARWorldTrackingConfiguration) {
@@ -138,7 +148,7 @@ struct FrozenDrawingFrame {
         if mode == .mapping { savedMap = nil }
         cancelViewCapture();frozenFrame = nil
         clearVisuals(); localization.searching(); normalSince = nil; restoredSentinel = false
-        clearSurfaces(); scan = ScanProgress(); coverage = ScanCoverage(); lastProgressUpdate = 0;renderingReduced=false
+        clearSurfaces(); scan = ScanProgress(); coverage = ScanCoverage(); lastProgressUpdate = 0;lastMiniatureUpdate = 0;renderingReduced=false
         trackingNormal = false; trackingIssue = .initializing; targetReady=false; mapped = false
         startedAt = Date(); running = true; interrupted = false
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
@@ -162,18 +172,21 @@ struct FrozenDrawingFrame {
         localization.confirm(normalTracking: trackingNormal)
         if localization.state == .aligned { render(); renderDraft(); refreshSurfaceVisuals(); guidance = "Room recognized. Saved drawings are visible." }
     }
-    func reject() { localization.lose(); clearVisuals(); guidance = "Alignment rejected. Retry room recognition; saved tasks remain available." }
-    func stop() { mapSave.reset();imageLoadGeneration=UUID();loadingSavedImages=false;cancelImageRequest();cancelViewCapture();stopped = true; running = false; view.session.pause(); clearVisuals(); clearSurfaces();imageTextures.removeAll() }
+    func stop() { mapSave.reset();imageLoadGeneration=UUID();loadingSavedImages=false;cancelImageRequest();cancelViewCapture();stopped = true; running = false; view.session.pause(); clearVisuals(); clearSurfaces();imageTextures.removeAll();renderedContent=nil }
     func suspend() {
         mapSave.reset()
         updateTracking(.unavailable)
-        guard running else { return }; interrupted = true; localization.lose(); trackingNormal = false; clearVisuals(); hideSurfaces(); view.session.pause()
-        guidance = mode == .mapping ? "Scan paused. Return to continue scanning." : "Session paused. Return and choose a recovery method."
+        guard running else { return }; interrupted = true; localization.lose(); trackingNormal = false; leaveFrozenView(); clearVisuals(); hideSurfaces(); view.session.pause()
+        guidance = mode == .mapping ? "Scan paused. Return to continue scanning." : "Session paused. Return to the same spot to recover alignment."
     }
+    /// Re-run without reset: ARKit keeps its in-memory map and anchors and relocalizes against them
+    /// (see `sessionShouldAttemptRelocalization`). A full reset would throw away the scan in progress.
     func resume() {
-        guard interrupted, ready else { return }; interrupted = false
-        if mode == .mapping { startMapping(); guidance = "Scan restarted after interruption. Look around the room again." }
-        else { startMap() }
+        guard interrupted, ready, running, !stopped else { return }; interrupted = false
+        view.session.run(configuration())
+        normalSince = nil; startedAt = Date()
+        if mode != .mapping { localization.searching() }
+        guidance = mode == .mapping ? "Scan resumed. Point at an area you already scanned so tracking can reconnect." : TrackingIssue.relocalizing.instruction
     }
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard running, !stopped, !interrupted else { return }
@@ -192,26 +205,34 @@ struct FrozenDrawingFrame {
         }
         updateTracking(issue)
         let normal=issue == .none
-        let mapIsReady=frame.worldMappingStatus == .mapped
+        // Apple's guidance: a map is worth saving once status is .mapped or .extending, never .limited/.notAvailable.
+        let mapIsReady=frame.worldMappingStatus == .mapped || frame.worldMappingStatus == .extending
         if mapped != mapIsReady { mapped=mapIsReady }
         if frame.timestamp - lastProgressUpdate > (renderingReduced ? 0.5 : 0.25) {
             if ProcessInfo.processInfo.thermalState == .serious || ProcessInfo.processInfo.thermalState == .critical { reduceScanLoad() }
             lastProgressUpdate = frame.timestamp
             var progress = ScanProgress()
             progress.normalTracking = normal; progress.mapReady = mapped
-            progress.stableSeconds = normal ? Double(frame.timestamp - (normalSince ?? frame.timestamp)) : 0
-            progress.featureCount = frame.rawFeaturePoints?.points.count ?? 0
-            progress.surfaces = ScanRenderingBudget.visiblePatches(Array(detectedSurfaces.values),camera:frame.camera.transform.columns.3.xyz,maximum:renderingReduced ? 12 : 24)
+            // Only threshold crossings matter to the UI. Quantizing keeps `scan` equal between ticks so SwiftUI stays idle.
+            let stable = normal ? Double(frame.timestamp - (normalSince ?? frame.timestamp)) : 0
+            progress.stableSeconds = min(2, (stable*2).rounded(.down)/2)
+            progress.featureCount = min(frame.rawFeaturePoints?.points.count ?? 0, ScanProgress.minimumFeatureCount)
+            let visible=ScanRenderingBudget.visiblePatches(Array(detectedSurfaces.values),camera:frame.camera.transform.columns.3.xyz,maximum:renderingReduced ? 12 : 24)
+            // The miniature consolidates geometry on the main thread; refresh it once a second unless the set of patches changes.
+            if frame.timestamp - lastMiniatureUpdate >= 1 || visible.map(\.id) != scan.surfaces.map(\.id) {
+                progress.surfaces = visible; lastMiniatureUpdate = frame.timestamp
+            } else { progress.surfaces = scan.surfaces }
             progress.observedSurfaceCount=detectedSurfaces.count
             progress.renderingReduced=renderingReduced
             if mode == .mapping {
                 coverage.observe(position:frame.camera.transform.columns.3.xyz,forward:-frame.camera.transform.columns.2.xyz,
                                  reliable:normal && progress.hasUsefulFeatures && (frame.worldMappingStatus == .mapped || frame.worldMappingStatus == .extending),at:frame.timestamp)
             }
-            progress.cameraYaw=atan2(-frame.camera.transform.columns.2.x,-frame.camera.transform.columns.2.z)
+            let yaw=atan2(-frame.camera.transform.columns.2.x,-frame.camera.transform.columns.2.z)
+            progress.cameraYaw=abs(ScanVisualization.shortAngle(from:scan.cameraYaw,to:yaw)-scan.cameraYaw)<0.035 ? scan.cameraYaw : yaw
             progress.coverage=coverage
-            scan = progress
-            updateTarget();renderScanSurfaces()
+            if scan != progress { scan = progress }
+            updateTarget();renderScanSurfaces(visible:visible)
         }
         if normal { if normalSince == nil { normalSince = frame.timestamp } } else { normalSince = nil }
         if mode == .mapping {
@@ -223,7 +244,8 @@ struct FrozenDrawingFrame {
             return
         }
         if !normal { setGuidance(issue.instruction) }
-        if !normal && (localization.state == .aligned || localization.state == .verifying) {
+        // A locked view carries its own camera and alignment, so a tracking hiccup must not take it away mid-drawing.
+        if !normal && frozenFrame == nil && localization.state == .aligned {
             localization.searching(); normalSince = nil; clearVisuals(); hideSurfaces(); startedAt = Date(); setGuidance(issue.instruction); return
         }
         if localization.recoverMap(restoredRoomAnchor: restoredSentinel, normalTracking: normal,
@@ -247,7 +269,8 @@ struct FrozenDrawingFrame {
             surfaceStability.removeAll(keepingCapacity:true)
             placementStability.removeAll(keepingCapacity:true);placementTimes.removeAll(keepingCapacity:true)
             targetedSurface=nil
-            cancelViewCapture();if lineDraft.isDrawing { endStroke() };if frozenFrame != nil { frozenFrame=nil };if targetReady { targetReady=false }
+            cancelViewCapture();if targetReady { targetReady=false }
+            if frozenFrame == nil, lineDraft.isDrawing { endStroke() }
         }
     }
     func session(_ session: ARSession, didAdd anchors: [ARAnchor]) { process(anchors) }
@@ -275,9 +298,9 @@ struct FrozenDrawingFrame {
     }
     // Preserve the current origin during transient tracking loss. Recovery/restart stays explicit.
     func sessionShouldAttemptRelocalization(_ session:ARSession) -> Bool { running && !stopped }
-    func sessionWasInterrupted(_ session: ARSession) { mapSave.reset();updateTracking(.relocalizing); interrupted = true; localization.lose(); trackingNormal = false; clearVisuals(); hideSurfaces(); guidance = "AR interrupted. Recover alignment after returning." }
+    func sessionWasInterrupted(_ session: ARSession) { mapSave.reset();updateTracking(.relocalizing); interrupted = true; localization.lose(); trackingNormal = false; leaveFrozenView(); clearVisuals(); hideSurfaces(); guidance = "AR interrupted. Recover alignment after returning." }
     func sessionInterruptionEnded(_ session: ARSession) { resume() }
-    func session(_ session: ARSession, didFailWithError error: Error) { mapSave.reset();updateTracking(.unavailable); localization.fail(); clearVisuals(); hideSurfaces(); self.error = "AR session failed: \(error.localizedDescription). Close AR and reopen the room." }
+    func session(_ session: ARSession, didFailWithError error: Error) { mapSave.reset();updateTracking(.unavailable); localization.fail(); leaveFrozenView(); clearVisuals(); hideSurfaces(); self.error = "AR session failed: \(error.localizedDescription). Close AR and reopen the room." }
 
     private func hit(_ point: CGPoint) -> simd_float4x4? {
         guard trackingNormal else { return nil }
@@ -296,13 +319,18 @@ struct FrozenDrawingFrame {
               let result=view.session.raycast(query).first,
               let plane=result.anchor as? ARPlaneAnchor,
               let camera=view.session.currentFrame?.camera else {
-            targetedSurface=nil; targetReady=false; surfaceTarget="Aim at a detected surface"; return
+            targetedSurface=nil; setTarget(ready:false,text:"Aim at a detected surface"); return
         }
         let distance=simd_distance(camera.transform.columns.3.xyz,result.worldTransform.columns.3.xyz)
         let settled=(try? Pose(plane.transform)).map { placementSurfaceIsReady(id:plane.identifier,pose:$0,at:view.session.currentFrame?.timestamp ?? 0) } ?? false
-        targetReady=settled && distance>=0.15 && distance<=5
-        targetedSurface=targetReady ? plane.identifier : nil
-        surfaceTarget=distance>5 ? "Move closer to the surface" : (distance<0.15 ? "Move slightly away from the surface" : (!settled ? "Surface refining — hold steady briefly" : String(format:"%@ · %.2f m",plane.alignment == .vertical ? "Vertical surface" : "Horizontal surface",distance)))
+        let ready=settled && distance>=0.15 && distance<=5
+        targetedSurface=ready ? plane.identifier : nil
+        // A 5 cm readout avoids republishing the whole screen for millimetre jitter.
+        setTarget(ready:ready,text:distance>5 ? "Move closer to the surface" : (distance<0.15 ? "Move slightly away from the surface" : (!settled ? "Surface refining — hold steady briefly" : String(format:"%@ · %.2f m",plane.alignment == .vertical ? "Vertical surface" : "Horizontal surface",(distance*20).rounded()/20))))
+    }
+    private func setTarget(ready:Bool,text:String) {
+        if targetReady != ready { targetReady=ready }
+        if surfaceTarget != text { surfaceTarget=text }
     }
     /// Placement tracking is independent of the display cache, including large/offscreen planes.
     func placementSurfaceIsReady(id:UUID,pose:Pose,at time:TimeInterval) -> Bool {
@@ -340,7 +368,9 @@ struct FrozenDrawingFrame {
         if tool == .line { lineDraft.end(); draft=lineDraft.points; renderDraft() }
     }
     func captureScreenPoint(_ point: CGPoint, reportMiss: Bool = true) {
-        guard mode == .editing, !lockingView, trackingNormal, let alignment = localization.roomToSession else { return }
+        // On a locked view the snapshot's own projection and alignment are authoritative; live tracking is not needed.
+        guard mode == .editing, !lockingView, trackingNormal || frozenFrame != nil,
+              let alignment = frozenFrame?.sessionFromRoom ?? localization.roomToSession else { return }
         if drawingPlane == nil {
             guard let hit = hit(point), let frame = view.session.currentFrame else {
                 if reportMiss { error = "No surface here yet. Scan another angle, or use measured-distance placement." }; return
@@ -411,7 +441,13 @@ struct FrozenDrawingFrame {
     private func cancelViewCapture() {
         if viewCapture.isPending { viewCapture.cancel();if draft.isEmpty { drawingPlane=nil } }
     }
-    func resumeCamera() { cancelViewCapture();frozenFrame = nil; if draft.isEmpty { drawingPlane = nil } }
+    func resumeCamera() {
+        cancelViewCapture();frozenFrame = nil; if draft.isEmpty { drawingPlane = nil }
+        // Tracking may have dropped while the view was locked; apply the deferred de-alignment now.
+        if !trackingNormal, localization.state == .aligned { localization.searching(); normalSince=nil; startedAt=Date(); clearVisuals(); hideSurfaces(); guidance=trackingIssue.instruction }
+    }
+    /// Session-level loss (background, interruption, failure) still ends a locked view.
+    private func leaveFrozenView() { if lineDraft.isDrawing { endStroke() }; cancelViewCapture(); frozenFrame = nil; if draft.isEmpty { drawingPlane = nil } }
     /// Capture at the centre crosshair; manual distance is an explicit adjustment, never a silent fallback.
     func capture(distance: Float? = nil) {
         guard !lockingView else { return }
@@ -589,12 +625,21 @@ struct FrozenDrawingFrame {
     private func renderDraft(throttled: Bool=false) {
         let now=CACurrentMediaTime()
         if throttled && now-lastDraftRender<1.0/30 { return }; lastDraftRender=now
+        // Mid-stroke, finished strokes are unchanged: only re-mesh the stroke under the finger.
+        if throttled, tool == .line, let preview, lineDraft.isDrawing, let live=lineDraft.strokes.last {
+            preview.findEntity(named:"live")?.removeFromParent()
+            addSmoothStroke(live,normal:drawingPlane?.matrix.columns.2.xyz ?? SIMD3(0,0,1),to:preview,color:.systemOrange,name:"live")
+            return
+        }
         if let preview { view.scene.removeAnchor(preview) }; preview=nil
         guard let alignment=localization.roomToSession, let first=draft.first else { return }
         let anchor=AnchorEntity(world:alignment.matrix)
         switch tool {
         case .line:
-            for path in lineDraft.strokes where path.count>=2 { addSmoothStroke(path,normal:drawingPlane?.matrix.columns.2.xyz ?? SIMD3(0,0,1),to:anchor,color:.systemOrange) }
+            for (index,path) in lineDraft.strokes.enumerated() where path.count>=2 {
+                let live=lineDraft.isDrawing && index == lineDraft.strokes.count-1
+                addSmoothStroke(path,normal:drawingPlane?.matrix.columns.2.xyz ?? SIMD3(0,0,1),to:anchor,color:.systemOrange,name:live ? "live" : "")
+            }
         case .area:
             for (a,b) in zip(draft,draft.dropFirst()) { addSegment(a.vector,b.vector,to:anchor,color:.systemOrange) }
             if draft.count>=3,let last=draft.last { addSegment(last.vector,first.vector,to:anchor,color:.systemOrange) }
@@ -616,6 +661,12 @@ struct FrozenDrawingFrame {
         guard !stopped else { return }
         if let content { view.scene.removeAnchor(content) }; content = nil
         guard let alignment = localization.roomToSession, trackingNormal else { return }
+        // Text meshes and collision shapes are expensive. Re-attach the last build when nothing changed,
+        // so recovering tracking does not hitch at the moment drawings reappear.
+        let key = RenderedContent.Key(annotations: annotations, textures: Set(imageTextures.keys), alignment: alignment)
+        if let renderedContent, renderedContent.key == key {
+            content = renderedContent.anchor; view.scene.addAnchor(renderedContent.anchor); return
+        }
         let anchor = AnchorEntity(world: alignment.matrix)
         for item in annotations {
             let root = Entity(); root.name = item.id.uuidString; root.transform = Transform(matrix: item.pose.matrix)
@@ -635,7 +686,7 @@ struct FrozenDrawingFrame {
             }
             root.generateCollisionShapes(recursive: true); anchor.addChild(root)
         }
-        content = anchor; view.scene.addAnchor(anchor)
+        content = anchor; view.scene.addAnchor(anchor); renderedContent = RenderedContent(key: key, anchor: anchor)
     }
     private func addSegment(_ a: SIMD3<Float>, _ b: SIMD3<Float>, to entity: Entity, color: UIColor, thickness: Float = 0.008) {
         let length = simd_distance(a,b); guard length > 0.002 else { return }
@@ -645,7 +696,7 @@ struct FrozenDrawingFrame {
 }
 
 extension ARController {
-    private func addSmoothStroke(_ controls:[Point3],normal:SIMD3<Float>,to entity:Entity,color:UIColor) {
+    private func addSmoothStroke(_ controls:[Point3],normal:SIMD3<Float>,to entity:Entity,color:UIColor,name:String="") {
         let p=DrawingGeometry.smoothStroke(controls).map(\.vector)
         guard p.count>=2 else { return }
         let sides=8, radius:Float=0.0035
@@ -667,7 +718,9 @@ extension ARController {
         let start=UInt32(vertices.count); vertices.append(p[0]); let end=UInt32(vertices.count); vertices.append(p[p.count-1])
         for j in 0..<sides { indices += [start,UInt32((j+1)%sides),UInt32(j),end,UInt32((p.count-1)*sides+j),UInt32((p.count-1)*sides+(j+1)%sides)] }
         var descriptor=MeshDescriptor(name:"Smooth independent stroke"); descriptor.positions=MeshBuffers.Positions(vertices); descriptor.primitives = .triangles(indices)
-        if let mesh=try? MeshResource.generate(from:[descriptor]) { entity.addChild(ModelEntity(mesh:mesh,materials:[UnlitMaterial(color:color)])) }
+        if let mesh=try? MeshResource.generate(from:[descriptor]) {
+            let model=ModelEntity(mesh:mesh,materials:[UnlitMaterial(color:color)]); model.name=name; entity.addChild(model)
+        }
     }
     private func addImage(_ texture:TextureResource,width:Float,height:Float,to entity:Entity) {
         var descriptor=MeshDescriptor(name:"Spatial image")
@@ -715,13 +768,19 @@ extension ARController {
         detectedSurfaces[patch.id]=patch
     }
     /// At most 24 patches and two drawables per patch; never one entity/animation per edge.
-    func renderScanSurfaces() {
+    /// `nearest` is the tick's already-ranked patch list, so ranking runs once per tick.
+    func renderScanSurfaces(visible nearest:[SurfacePatch]? = nil) {
         guard trackingNormal,mode == .mapping || localization.state == .aligned else { hideSurfaces();return }
-        let camera=view.session.currentFrame?.camera.transform.columns.3.xyz ?? .zero
         let visible:[SurfacePatch]
-        if showSurfaceGuides { visible=ScanRenderingBudget.visiblePatches(Array(detectedSurfaces.values),camera:camera,maximum:renderingReduced ? 12 : 24) }
+        if showSurfaceGuides {
+            let camera=view.session.currentFrame?.camera.transform.columns.3.xyz ?? .zero
+            visible=nearest ?? ScanRenderingBudget.visiblePatches(Array(detectedSurfaces.values),camera:camera,maximum:renderingReduced ? 12 : 24)
+        }
         else if mode == .editing,drawingPlane == nil,let id=targetedSurface,let patch=detectedSurfaces[id] { visible=[patch] }
         else { visible=[] }
+        // ARKit refines most planes every frame. Rebuilding every outline each tick caused periodic main-thread
+        // hitches, so new outlines always appear but refinements of existing ones are spread across ticks (nearest first).
+        var refinements=renderingReduced ? 2 : 4
         let ids=Set(visible.map(\.id))
         for id in Array(surfaceEntities.keys) where !ids.contains(id) {
             if let root=surfaceEntities.removeValue(forKey:id) { view.scene.removeAnchor(root) }
@@ -735,8 +794,11 @@ extension ARController {
                 view.scene.addAnchor(root)
             }
             root.isEnabled=true;root.transform=Transform(matrix:patch.pose.matrix)
-            if renderedPatches[patch.id]?.vertices == patch.vertices { continue }
             let firstGeometry=renderedPatches[patch.id] == nil
+            if let rendered=renderedPatches[patch.id] {
+                if Self.outlineMatches(rendered.vertices,patch.vertices) { continue }
+                guard refinements>0 else { continue }; refinements -= 1
+            }
             let points=ScanRenderingBudget.displayBoundary(patch.vertices,maximum:renderingReduced ? 12 : 24)
                 .map { Point3($0.vector+SIMD3<Float>(0,0.003,0)) }
             var allRendered=true
@@ -762,6 +824,10 @@ extension ARController {
                 if firstGeometry { revealOutline(root) }
             } else { renderedPatches.removeValue(forKey:patch.id) }
         }
+    }
+    /// Sub-centimetre boundary jitter is invisible at room scale and not worth a new mesh.
+    private static func outlineMatches(_ a:[Point3],_ b:[Point3]) -> Bool {
+        a.count == b.count && zip(a,b).allSatisfy { simd_distance_squared($0.vector,$1.vector) < 0.0001 }
     }
     /// One engine-managed animation per outline, without per-frame mesh regeneration.
     private func revealOutline(_ root:Entity) {

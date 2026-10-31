@@ -7,10 +7,8 @@ public struct ScanModelFace: Sendable {
     public init(vertices:[SIMD3<Float>],shade:Float) { self.vertices=vertices; self.shade=shade }
 }
 public enum ScanVisualization {
-    /// Presentation targets only; actual frame rate still requires device profiling.
-    public static func animationFrameInterval(for surfaceCount:Int) -> TimeInterval {
-        surfaceCount<=8 ? 1.0/60 : 1.0/30
-    }
+    /// The miniature is drawn on the CPU next to a live camera feed; 30 fps is smooth at its size and leaves the frame budget to AR.
+    public static let animationFrameInterval: TimeInterval = 1.0/30
     /// Thin slabs of observed patches only. No inferred walls, windows, furniture or floor.
     public static func faces(_ patch: SurfacePatch, vertices:[SIMD3<Float>]? = nil, thickness:Float=0.025) -> [ScanModelFace] {
         let p=vertices ?? patch.worldVertices

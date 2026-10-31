@@ -9,6 +9,25 @@ struct CameraView: UIViewRepresentable {
     func makeUIView(context: Context) -> ARView { controller.view }
     func updateUIView(_ uiView: ARView, context: Context) {}
 }
+/// Keeps the phone awake while AR is open and confirms scan/recognition milestones with haptics.
+private struct ARSessionFeedback: ViewModifier {
+    @ObservedObject var ar: ARController
+    func body(content: Content) -> some View {
+        content
+            // Scans take minutes; auto-lock would pause AR mid-scan.
+            .onAppear { UIApplication.shared.isIdleTimerDisabled=true }
+            .onDisappear { UIApplication.shared.isIdleTimerDisabled=false }
+            .persistentSystemOverlays(.hidden)
+            .sensoryFeedback(.selection,trigger:ar.scan.coverage.headings.count) { old,new in new>old }
+            .sensoryFeedback(.selection,trigger:ar.scan.coverage.positions.count) { old,new in new>old }
+            .sensoryFeedback(.success,trigger:ar.scan.canFinish) { _,ready in ready }
+            .sensoryFeedback(.success,trigger:ar.localization.state) { old,new in new == .aligned && old != .aligned }
+    }
+}
+private struct ToolsHeightPreference: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value:inout CGFloat,nextValue:()->CGFloat) { value=max(value,nextValue()) }
+}
 private struct CameraAimPreference: PreferenceKey {
     static var defaultValue: CGPoint? = nil
     static func reduce(value:inout CGPoint?,nextValue:()->CGPoint?) { value=nextValue() ?? value }
@@ -41,6 +60,7 @@ struct ARScreen: View {
     @State private var restartingScan=false
     @State private var showingScanGuide=false
     @State private var scanGuideImage:UIImage?
+    @State private var toolsHeight:CGFloat=0
     init(room: Room, mode: ARMode, manager: Bool) {
         self.manager = manager; startSession=true
         _ar = StateObject(wrappedValue: ARController(room: room, mode: mode))
@@ -50,13 +70,11 @@ struct ARScreen: View {
         self.manager=manager; startSession=false; _ar=StateObject(wrappedValue:controller)
     }
     private var statusTitle: String {
-        if mode == .mapping { return ar.scan.canFinish ? "Ready to draw" : "Scanning room" }
         if !ar.trackingNormal && ar.ready { return ar.trackingIssue.title }
         switch ar.localization.state {
         case .aligned: return "Room recognized"
         case .failed: return "Room not recognized"
         case .lost: return "Tracking lost"
-        case .verifying: return "Check recovery alignment"
         default: return "Recognizing room…"
         }
     }
@@ -75,12 +93,24 @@ struct ARScreen: View {
                 }.padding(.horizontal,8).background(.regularMaterial,in:RoundedRectangle(cornerRadius:14))
                 VStack(alignment:.leading,spacing:5) {
                     Label(statusTitle,systemImage:ar.localization.state == .aligned ? "checkmark.circle.fill" : "viewfinder").font(.subheadline.weight(.semibold))
-                    if mode == .mapping || ar.localization.state != .aligned { Text(ar.guidance).font(.caption).lineLimit(3).fixedSize(horizontal:false,vertical:true) }
-                    if mode != .mapping,ar.localization.state != .aligned,let guide=room.scan_guide_jpeg {
-                        Button("Show saved viewpoint",systemImage:"photo") {
-                            if let image=ScanGuideImage.thumbnail(guide) { scanGuideImage=image;showingScanGuide=true }
+                    if ar.localization.state != .aligned { Text(ar.guidance).font(.caption).lineLimit(3).fixedSize(horizontal:false,vertical:true) }
+                    // Like Apple's relocalization sample, show the saved view right away instead of behind a button.
+                    if ar.localization.state != .aligned,room.scan_guide_jpeg != nil {
+                        Button {
+                            if scanGuideImage != nil { showingScanGuide=true }
                             else { ar.error="The saved viewpoint photo could not be opened. Continue looking for familiar room details." }
-                        }.font(.caption).frame(minHeight:44,alignment:.leading).accessibilityIdentifier("room.scanGuide")
+                        } label: {
+                            HStack(spacing:10) {
+                                if let scanGuideImage {
+                                    Image(uiImage:scanGuideImage).resizable().scaledToFill().frame(width:44,height:58)
+                                        .clipShape(RoundedRectangle(cornerRadius:6)).accessibilityHidden(true)
+                                } else { Image(systemName:"photo").frame(width:44) }
+                                VStack(alignment:.leading,spacing:2) {
+                                    Text("Match this saved view").font(.caption.weight(.semibold))
+                                    Text("Tap to enlarge").font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                        }.buttonStyle(.plain).frame(minHeight:44,alignment:.leading).accessibilityIdentifier("room.scanGuide")
                     }
                     if ar.loadingSavedImages { Text("Loading image instructions…").font(.caption).foregroundStyle(.secondary) }
                 }.frame(maxWidth:.infinity,alignment:.leading).padding(10).background(.regularMaterial,in:RoundedRectangle(cornerRadius:14))
@@ -90,50 +120,28 @@ struct ARScreen: View {
                         if mode == .editing { Image(systemName:"plus").font(.system(size:20,weight:.semibold)).foregroundStyle(.white).shadow(radius:2).accessibilityHidden(true) }
                     }.preference(key:CameraAimPreference.self,value:CGPoint(x:proxy.frame(in:.global).midX,y:proxy.frame(in:.global).midY))
                 }.frame(minHeight:44).allowsHitTesting(false)
-                if mode == .mapping || scanMore { ScanOverview(progress: ar.scan) }
-                if ar.localization.state == .verifying {
-                    VStack {
-                        Text("Check this alignment against recognizable room features before confirming it.").font(.subheadline)
-                        HStack { Button("Incorrect") { ar.reject() }; Spacer(); Button("Confirm recovery") { ar.confirm() }.buttonStyle(.borderedProminent).disabled(!ar.trackingNormal) }
-                    }.padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-                }
-                if tools && ar.localization.state != .verifying {
+                if scanMore { ScanOverview(progress: ar.scan) }
+                if tools {
                     VStack(spacing:0) {
+                    // Size to the measured content; scroll only when it exceeds the cap. One view identity keeps control state.
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                                if ar.localization.state == .aligned {
-                                    if mode == .editing {
-                                        if scanMore {
-                                            Text("Move around missed walls and corners. Outlines show detected patches, not full-room coverage.").font(.caption)
-                                            Button("Back to drawing") { scanMore=false; ar.showSurfaceGuides=false }
-                                        } else { editorTools }
-                                        Button(scanMore ? "Hide scan overview" : "Scan more surfaces") { ar.resumeCamera(); scanMore.toggle(); ar.showSurfaceGuides=scanMore }.font(.caption)
-                                    } else { Toggle("Show surface outlines", isOn: $ar.showSurfaceGuides).font(.caption) }
-                                } else if ar.localization.state != .verifying {
-                                    if ar.localization.state == .failed && ar.mapAvailable {
-                                        Button("Keep searching") { ar.continueSearching() }.buttonStyle(.borderedProminent)
-                                    }
-                                    Button("Scan room again") { ar.startMap() }.buttonStyle(.borderedProminent).disabled(!ar.ready || !ar.mapAvailable)
-                                }
-                                if ar.localization.state == .aligned { Button("Recognize room again") { ar.startMap() }.font(.caption) }
-                        }.padding()
-                    }.scrollIndicators(.visible).frame(maxHeight: mode == .mapping ? (showingScanOptions ? 200 : 56) : (mode == .walkthrough ? 100 : 200))
-                    if mode == .mapping {
-                        Divider()
-                        Button { saveRoom() } label: { Label("Finish scan",systemImage:"pencil.tip").font(.headline).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth:.infinity,minHeight:36) }
-                            .buttonStyle(.borderedProminent).disabled(!ar.scan.canFinish || saving).accessibilityIdentifier("scan.finish").padding(12)
-                    }
+                        toolsContent.background(GeometryReader { proxy in Color.clear.preference(key:ToolsHeightPreference.self,value:proxy.size.height) })
+                    }.scrollIndicators(.visible).scrollBounceBehavior(.basedOnSize)
+                    .frame(height:min(max(toolsHeight,44),mode == .walkthrough ? 120 : 200))
+                    .onPreferenceChange(ToolsHeightPreference.self) { toolsHeight=$0 }
                     if mode == .editing && ar.localization.state == .aligned && !scanMore { Divider(); saveBar.padding(.horizontal,12).padding(.vertical,8) }
                     }.frame(maxWidth:.infinity).background(.regularMaterial,in:RoundedRectangle(cornerRadius:14))
                 }
-                if mode != .mapping && ar.localization.state != .verifying { Button("Tools",systemImage:tools ? "chevron.down" : "chevron.up") { tools.toggle() }.font(.caption).padding(.horizontal,12).frame(minHeight:44).background(.regularMaterial,in:Capsule()).accessibilityLabel(tools ? "Hide tools" : "Show tools") }
+                Button("Tools",systemImage:tools ? "chevron.down" : "chevron.up") { tools.toggle() }.font(.caption).padding(.horizontal,12).frame(minHeight:44).background(.regularMaterial,in:Capsule()).accessibilityLabel(tools ? "Hide tools" : "Show tools")
             }.padding(.horizontal, 12).padding(.bottom, 8)
             }
             if saving { Color.black.opacity(0.3).ignoresSafeArea(); ProgressView("Saving room…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) }
         }
         .onPreferenceChange(CameraAimPreference.self) { point in if let point { ar.aimPoint=ar.view.convert(point,from:nil) } }
         .task { if startSession { await ar.prepare(store:store) } }
+        .task(id:room.scan_guide_jpeg) { scanGuideImage=room.scan_guide_jpeg.flatMap(ScanGuideImage.thumbnail) }
         .onDisappear { ar.stop() }
+        .modifier(ARSessionFeedback(ar:ar))
         .onChange(of:title) { _, value in ar.draftText=value }
         .sheet(isPresented:$showingWorkDetails) { DrawingWorkDetails(title:$title,details:$detail,priority:$priority) }
         .sheet(isPresented:$showingPlacement) { DrawingPlacementSettings(measured:$manualDistance,distance:$distance) }
@@ -147,7 +155,8 @@ struct ARScreen: View {
                 catch { if ar.imageRequestIsCurrent(request) { ar.error=error.localizedDescription } }
             }
         }
-        .onChange(of: phase) { _, phase in if phase == .active { ar.resume() } else { ar.suspend() } }
+        // Only real backgrounding pauses AR. `.inactive` (Control Center, notification banners, system alerts) keeps the session running.
+        .onChange(of: phase) { _, phase in if phase == .active { ar.resume() } else if phase == .background { ar.suspend() } }
         .alert("AR guidance", isPresented: Binding(get: { ar.error != nil }, set: { if !$0 { ar.error = nil } })) { Button("OK") { ar.error = nil } } message: { Text(ar.error ?? "") }
         .confirmationDialog(mode == .mapping ? "Leave this unsaved scan?" : (ar.draft.isEmpty ? "Close AR? Saved drawings will be kept." : "Discard unsaved drawing and close AR?"), isPresented: $closing, titleVisibility: .visible) {
             Button("Close AR", role: ar.draft.isEmpty && mode != .mapping ? nil : .destructive) { dismiss() }
@@ -191,6 +200,28 @@ struct ARScreen: View {
             } : nil) }.environmentObject(store)
         }
     }
+    private var toolsContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if ar.localization.state == .aligned {
+                if mode == .editing {
+                    if scanMore {
+                        Text("Move around missed walls and corners. Outlines show detected patches, not full-room coverage.").font(.caption)
+                        Button("Back to drawing") { scanMore=false; ar.showSurfaceGuides=false }
+                    } else { editorTools }
+                    Button(scanMore ? "Hide scan overview" : "Scan more surfaces") { ar.resumeCamera(); scanMore.toggle(); ar.showSurfaceGuides=scanMore }.font(.caption)
+                } else { Toggle("Show surface outlines", isOn: $ar.showSurfaceGuides).font(.caption) }
+                Button("Restart recognition") { ar.startMap() }.font(.caption)
+            } else if ar.mapAvailable {
+                if ar.localization.state == .failed {
+                    Button("Keep searching") { ar.continueSearching() }.buttonStyle(.borderedProminent)
+                }
+                Button("Restart recognition") { ar.startMap() }.buttonStyle(.bordered).disabled(!ar.ready)
+            } else {
+                if ar.ready { Text("No saved room map. Use the task list, or ask the manager to scan this room.").font(.caption) }
+                else { ProgressView().frame(maxWidth:.infinity).accessibilityLabel("Starting camera") }
+            }
+        }.frame(maxWidth:.infinity,alignment:.leading).padding()
+    }
     private var scanCoachTitle:String {
         if ar.trackingIssue == .unavailable { return "AR unavailable" }
         if !ar.ready { return "Starting camera" }
@@ -215,6 +246,7 @@ struct ARScreen: View {
                     Button { saveRoom() } label: {
                         Text("Finish").fontWeight(.semibold).frame(minWidth:64,minHeight:44)
                     }.disabled(!ar.scan.canFinish || saving).opacity(ar.scan.canFinish && !saving ? 1 : 0.35).accessibilityIdentifier("scan.finish")
+                        .animation(.easeInOut(duration:0.25),value:ar.scan.canFinish)
                 }.font(.body).buttonStyle(.plain).shadow(color:.black.opacity(0.5),radius:3,y:1)
                 if !ar.scan.canFinish || (ar.ready && ar.trackingIssue != .none) {
                     Label(scanCoachTitle,systemImage:ar.trackingIssue == .excessiveMotion ? "hand.raised" : "viewfinder")
@@ -222,6 +254,7 @@ struct ARScreen: View {
                         .padding(.horizontal,16).padding(.vertical,10)
                         .background(.ultraThinMaterial,in:Capsule()).frame(maxWidth:320)
                         .accessibilityLabel(ar.guidance)
+                        .animation(.easeInOut(duration:0.2),value:scanCoachTitle)
                     HStack(spacing:6) {
                         ForEach(0..<4,id: \.self) { heading in
                             let progress=ar.scan.coverage.directionProgress[heading]
@@ -229,6 +262,7 @@ struct ARScreen: View {
                                 Capsule().fill(.white.opacity(0.25))
                                     .overlay(alignment:.leading) {
                                         Capsule().fill(.mint).frame(width:geometry.size.width*progress)
+                                            .animation(.linear(duration:0.25),value:progress)
                                     }
                             }.frame(height:4)
                                 .accessibilityLabel("View \(heading+1): \(progress >= 1 ? "recorded" : "pending")")
@@ -336,7 +370,7 @@ struct ARScreen: View {
             Button { ar.undoPoint() } label: { Image(systemName:"arrow.uturn.backward").frame(width:22,height:22) }
                 .buttonStyle(.bordered).frame(minWidth:44,minHeight:44).accessibilityLabel(ar.tool == .line ? "Undo stroke" : "Undo").disabled(ar.draft.isEmpty)
             Button { ar.clearDraft() } label: { Image(systemName:"trash").frame(width:22,height:22) }
-                .buttonStyle(.bordered).frame(minWidth:44,minHeight:44).accessibilityLabel("Leeren").disabled(ar.draft.isEmpty && ar.drawingPlane == nil)
+                .buttonStyle(.bordered).frame(minWidth:44,minHeight:44).accessibilityLabel("Clear drawing").disabled(ar.draft.isEmpty && ar.drawingPlane == nil)
             Button { saveDrawing() } label: { Label("Save",systemImage:"checkmark").font(.headline).lineLimit(1).minimumScaleFactor(0.75).frame(maxWidth:.infinity,minHeight:36) }
                 .buttonStyle(.borderedProminent).accessibilityIdentifier("drawing.save").disabled(ar.draft.isEmpty || saving || ar.imageLoading || (ar.tool == .image && ar.imageData == nil))
         }

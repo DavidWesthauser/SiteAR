@@ -36,7 +36,7 @@ struct ScanMiniature: View {
         var alpha:Double
     }
     var body: some View {
-        TimelineView(.animation(minimumInterval:ScanVisualization.animationFrameInterval(for:modelInitialized ? model.count : surfaces.count),paused:reduceMotion || reducedDetail || !animating)) { tick in
+        TimelineView(.animation(minimumInterval:ScanVisualization.animationFrameInterval,paused:reduceMotion || reducedDetail || !animating)) { tick in
             Canvas { context,size in
                 let now=tick.date,reduced=reduceMotion || reducedDetail
                 let t=reduced ? Float(1) : min(1,max(0,Float(now.timeIntervalSince(yawStart))/0.35))
