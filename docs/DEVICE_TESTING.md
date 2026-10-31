@@ -35,7 +35,7 @@ Do not connect the backend for the current file-transfer test. Use [backend setu
 
 - **Timeout:** enter a different room or change lighting significantly. Wait 40 seconds. No drawings should appear at a new arbitrary origin. Return to the original viewpoints, choose Scan room again and recover.
 - **Tracking loss:** cover the lens/move too quickly. Drawings must disappear, recognition restarts, and normal tracking plus correct saved-map evidence is required to show them again.
-- **Interruption/background:** lock/unlock or background. New scans restart with guidance; saved rooms recover again. Draft drawing points stay room-relative while the screen remains alive. Leaving warns before discarding unsaved work.
+- **Interruption/background:** lock/unlock or background. New scans resume and keep their progress once ARKit relocalizes (point at an already-scanned area); saved rooms recover again. Pulling down Control Center must not pause or reset the scan, and the screen must not auto-lock during a long scan. Draft drawing points stay room-relative while the screen remains alive. Leaving warns before discarding unsaved work.
 - **Poor planes:** on a textureless wall, a failed raycast must report/skip placement rather than invent a depth. Explicit measured-distance placement must require a real user measurement.
 - **Plane merging:** revisit the same wall; merged plane anchors should replace old patches/counts. Counts are not a promise of unique architectural walls or complete room coverage.
 - **Black video:** verify camera permission, stop Device Hub screen viewing, close/reopen AR directly on the phone. Do not attempt to verify live AR through mirroring.
