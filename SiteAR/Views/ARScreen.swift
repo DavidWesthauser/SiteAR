@@ -24,6 +24,10 @@ private struct ARSessionFeedback: ViewModifier {
             .sensoryFeedback(.success,trigger:ar.localization.state) { old,new in new == .aligned && old != .aligned }
     }
 }
+private struct ToolsHeightPreference: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value:inout CGFloat,nextValue:()->CGFloat) { value=max(value,nextValue()) }
+}
 private struct CameraAimPreference: PreferenceKey {
     static var defaultValue: CGPoint? = nil
     static func reduce(value:inout CGPoint?,nextValue:()->CGPoint?) { value=nextValue() ?? value }
@@ -56,6 +60,7 @@ struct ARScreen: View {
     @State private var restartingScan=false
     @State private var showingScanGuide=false
     @State private var scanGuideImage:UIImage?
+    @State private var toolsHeight:CGFloat=0
     init(room: Room, mode: ARMode, manager: Bool) {
         self.manager = manager; startSession=true
         _ar = StateObject(wrappedValue: ARController(room: room, mode: mode))
@@ -118,25 +123,12 @@ struct ARScreen: View {
                 if scanMore { ScanOverview(progress: ar.scan) }
                 if tools {
                     VStack(spacing:0) {
+                    // Size to the measured content; scroll only when it exceeds the cap. One view identity keeps control state.
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                                if ar.localization.state == .aligned {
-                                    if mode == .editing {
-                                        if scanMore {
-                                            Text("Move around missed walls and corners. Outlines show detected patches, not full-room coverage.").font(.caption)
-                                            Button("Back to drawing") { scanMore=false; ar.showSurfaceGuides=false }
-                                        } else { editorTools }
-                                        Button(scanMore ? "Hide scan overview" : "Scan more surfaces") { ar.resumeCamera(); scanMore.toggle(); ar.showSurfaceGuides=scanMore }.font(.caption)
-                                    } else { Toggle("Show surface outlines", isOn: $ar.showSurfaceGuides).font(.caption) }
-                                } else {
-                                    if ar.localization.state == .failed && ar.mapAvailable {
-                                        Button("Keep searching") { ar.continueSearching() }.buttonStyle(.borderedProminent)
-                                    }
-                                    Button("Scan room again") { ar.startMap() }.buttonStyle(.borderedProminent).disabled(!ar.ready || !ar.mapAvailable)
-                                }
-                                if ar.localization.state == .aligned { Button("Recognize room again") { ar.startMap() }.font(.caption) }
-                        }.padding()
-                    }.scrollIndicators(.visible).frame(maxHeight: mode == .walkthrough ? 100 : 200)
+                        toolsContent.background(GeometryReader { proxy in Color.clear.preference(key:ToolsHeightPreference.self,value:proxy.size.height) })
+                    }.scrollIndicators(.visible).scrollBounceBehavior(.basedOnSize)
+                    .frame(height:min(max(toolsHeight,44),mode == .walkthrough ? 120 : 200))
+                    .onPreferenceChange(ToolsHeightPreference.self) { toolsHeight=$0 }
                     if mode == .editing && ar.localization.state == .aligned && !scanMore { Divider(); saveBar.padding(.horizontal,12).padding(.vertical,8) }
                     }.frame(maxWidth:.infinity).background(.regularMaterial,in:RoundedRectangle(cornerRadius:14))
                 }
@@ -207,6 +199,28 @@ struct ARScreen: View {
                 }
             } : nil) }.environmentObject(store)
         }
+    }
+    private var toolsContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if ar.localization.state == .aligned {
+                if mode == .editing {
+                    if scanMore {
+                        Text("Move around missed walls and corners. Outlines show detected patches, not full-room coverage.").font(.caption)
+                        Button("Back to drawing") { scanMore=false; ar.showSurfaceGuides=false }
+                    } else { editorTools }
+                    Button(scanMore ? "Hide scan overview" : "Scan more surfaces") { ar.resumeCamera(); scanMore.toggle(); ar.showSurfaceGuides=scanMore }.font(.caption)
+                } else { Toggle("Show surface outlines", isOn: $ar.showSurfaceGuides).font(.caption) }
+                Button("Restart recognition") { ar.startMap() }.font(.caption)
+            } else if ar.mapAvailable {
+                if ar.localization.state == .failed {
+                    Button("Keep searching") { ar.continueSearching() }.buttonStyle(.borderedProminent)
+                }
+                Button("Restart recognition") { ar.startMap() }.buttonStyle(.bordered).disabled(!ar.ready)
+            } else {
+                if ar.ready { Text("No saved room map. Use the task list, or ask the manager to scan this room.").font(.caption) }
+                else { ProgressView().frame(maxWidth:.infinity).accessibilityLabel("Starting camera") }
+            }
+        }.frame(maxWidth:.infinity,alignment:.leading).padding()
     }
     private var scanCoachTitle:String {
         if ar.trackingIssue == .unavailable { return "AR unavailable" }
