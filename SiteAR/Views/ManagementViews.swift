@@ -101,6 +101,8 @@ struct ProjectDetail: View {
     @State private var name = ""; @State private var email = ""
     @State private var addRoom = false; @State private var rename = false; @State private var deleting = false
     var manager: Bool { project.owner_id == store.userID }
+    /// The store's copy, so a rename shows immediately without leaving the screen.
+    private var current: Project { store.projects.first(where:{ $0.id == project.id }) ?? project }
     var body: some View {
         List {
             Section("Rooms") {
@@ -131,11 +133,11 @@ struct ProjectDetail: View {
                     NavigationLink("Manage worker access") { MembersView(project: project) }
                 } }
                 Section("Project") {
-                    Button("Rename project") { name = project.name; rename = true }
+                    Button("Rename project") { name = current.name; rename = true }
                     Button("Delete project and all rooms", role: .destructive) { deleting = true }
                 }
             }
-        }.navigationTitle(project.name).navigationBarTitleDisplayMode(.inline)
+        }.navigationTitle(current.name).navigationBarTitleDisplayMode(.inline)
         .task { do { try await store.loadRooms(project) } catch { store.error = error.localizedDescription } }
         .refreshable { do { try await store.loadRooms(project) } catch { store.error = error.localizedDescription } }
         .alert("Add room", isPresented: $addRoom) {
@@ -145,7 +147,8 @@ struct ProjectDetail: View {
         }
         .alert("Rename project", isPresented: $rename) {
             TextField("Name", text: $name)
-            Button("Save") { guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; store.run { try await store.renameProject(project, name: name); dismiss() } }
+            Button("Save") { guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; store.run { try await store.renameProject(project, name: name) } }
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.busy)
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog("Permanently delete this project, its rooms and instructions?", isPresented: $deleting, titleVisibility: .visible) {
@@ -221,6 +224,7 @@ struct RoomDetail: View {
         .alert("Rename room", isPresented: $rename) {
             TextField("Name", text: $name)
             Button("Save") { guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; store.run { try await store.renameRoom(current, name: name); await refresh() } }
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.busy)
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog("Permanently delete this room and its instructions?", isPresented: $deleting, titleVisibility: .visible) {

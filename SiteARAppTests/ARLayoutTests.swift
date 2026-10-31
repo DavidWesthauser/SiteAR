@@ -60,7 +60,7 @@ import RealityKit
             if name=="area-editor" { ar.tool = .area }
             if name.hasPrefix("image-") { ar.tool = .image }
             if name=="image-loaded" { try await ar.setImage(sampleImage().pngData()!) }
-            if name=="recovery" { ar.localization.propose(.identity,method:.marker); ar.trackingNormal=true }
+            if name=="recovery" { ar.ready=true;ar.updateTracking(.none);ar.localization.searching();ar.localization.timedOut() } // Search timed out; "Keep searching" path.
             for size in [CGSize(width:375,height:667),CGSize(width:375,height:812)] {
                 try await snapshot(AnyView(ARScreen(controller:ar,manager:mode != .walkthrough)),store:store,name:"\(name)-\(Int(size.height))",size:size)
             }
@@ -240,6 +240,40 @@ import RealityKit
         XCTAssertTrue(root.children.isEmpty) // Invalid refinement cannot leave a stale valid outline.
         ar.showSurfaceGuides=false;XCTAssertFalse(root.isEnabled)
         ar.stop();XCTAssertTrue(ar.view.scene.anchors.isEmpty)
+    }
+    func testRecoveredDrawingsReuseTheirBuiltScene() throws {
+        let room=Room(project_id:UUID(),name:"Render cache fixture")
+        let ar=ARController(room:room,mode:.walkthrough)
+        ar.updateTracking(.none)
+        ar.annotations=[Annotation(room:room,kind:.text,pose:.identity,title:"Wall instruction",detail:"")]
+        ar.localization.propose(.identity,method:.map);ar.confirm()
+        let built=try XCTUnwrap(ar.view.scene.anchors.first)
+        let sentinel=ARAnchor(name:"SiteAR.room.\(room.coordinate_id.uuidString)",transform:matrix_identity_float4x4)
+        ar.session(ar.view.session,didRemove:[sentinel])
+        XCTAssertTrue(ar.view.scene.anchors.isEmpty)
+        ar.localization.propose(.identity,method:.map);ar.confirm()
+        XCTAssertTrue(ar.view.scene.anchors.first === built) // Recovery re-attaches; no mesh regeneration.
+        ar.annotations.append(Annotation(room:room,kind:.text,pose:.identity,title:"Second instruction",detail:""));ar.render()
+        XCTAssertEqual(ar.view.scene.anchors.count,1);XCTAssertFalse(ar.view.scene.anchors.first === built)
+        ar.stop()
+    }
+    func testOutlineRefinementsAreSpreadAcrossTicks() throws {
+        let room=Room(project_id:UUID(),name:"Refinement budget fixture")
+        let ar=ARController(room:room,mode:.mapping);ar.trackingNormal=true
+        func square(_ size:Float) -> [Point3] { [Point3(.zero),Point3(SIMD3(size,0,0)),Point3(SIMD3(size,0,1)),Point3(SIMD3(0,0,1))] }
+        var patches=try (0..<10).map { i -> SurfacePatch in
+            var matrix=matrix_identity_float4x4;matrix.columns.3.x=Float(i)*3
+            return SurfacePatch(id:UUID(),pose:try Pose(matrix),vertices:square(1),vertical:false)
+        }
+        patches.forEach(ar.updateSurfacePatch);ar.renderScanSurfaces()
+        XCTAssertEqual(ar.view.scene.anchors.count,10) // New outlines are never deferred.
+        func widened() -> Int { ar.view.scene.anchors.filter { ($0.findEntity(named:"edge")?.visualBounds(relativeTo:$0).extents.x ?? 0)>1.5 }.count }
+        for i in patches.indices { patches[i].vertices[1].x+=0.004 };patches.forEach(ar.updateSurfacePatch);ar.renderScanSurfaces()
+        XCTAssertEqual(widened(),0) // Sub-centimetre jitter keeps the existing meshes.
+        for i in patches.indices { patches[i].vertices=square(2) };patches.forEach(ar.updateSurfacePatch)
+        ar.renderScanSurfaces();XCTAssertEqual(widened(),4)
+        ar.renderScanSurfaces();ar.renderScanSurfaces();XCTAssertEqual(widened(),10)
+        ar.stop()
     }
     func testSmoothSeparatedStrokeAndImageRendering() async throws {
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
